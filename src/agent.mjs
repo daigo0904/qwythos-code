@@ -576,6 +576,28 @@ export class Agent {
             }
           }
 
+          // 「消した」と言っているのに、**同じ中身がコメントとして残っている**場合。
+          //
+          // 行は確かに消えているので、消えた行を数える見張りは全部黙る。
+          // 実測（2026-09-24）: 「greet関数を削除して…」と報告して、
+          // `# def greet():` を増やしただけだった。消したのではなく隠しただけ。
+          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+            const 隠した = removalClaimNames(said).length || /(削除|除去|消去|取り除)/.test(said)
+              ? removalWasJustCommentedOut(this.ctx) : [];
+            if (隠した.length) {
+              nudges++;
+              info(`「${隠した[0].slice(0, 30)}」はコメントとして残っているので、促しました。`);
+              this.messages.push({
+                role: 'user',
+                content:
+                  `You said you removed it, but \`${隠した[0].slice(0, 80)}\` is still in the file as a comment. ` +
+                  'Commenting a line out is not removing it. ' +
+                  'Delete the lines, or say plainly that you commented them out instead.'
+              });
+              continue;
+            }
+          }
+
           // このお願いの中で**一度も通らなかったコマンド**があるのに、
           // 報告がそのことに一言も触れていない場合。
           //
@@ -2299,6 +2321,60 @@ export function claimedButNothingChanged(said, ctx) {
  *   ここは「そもそも何も消えていない」だけを見る。
  *   中身を控えていない書き換え（big）が混ざっていたら確かめようがないので黙る。
  */
+/**
+ * 「消した」と言っているのに、**同じ中身がコメントとして残っている**場合。
+ *
+ * ■ 消したのではなく、隠しただけ
+ *   実測（2026-09-24・qwen2.5-coder）:
+ *     報告「greet関数を削除して再度実行できるようにしました。」
+ *     消えた行: `def greet():` / `    print('Hello, world!')`
+ *     増えた行: `# def greet():` / `#     print('Hello, world!')`
+ *   **行は確かに消えているので、消えた行を数える見張りは全部黙る。**
+ *   コードは動かなくなるので「直った」ように見えるが、中身は残っている。
+ *
+ * ■ どう見分けるか
+ *   消えた行から行頭の記号と空白を取り、増えた行からも同じように取って、
+ *   **同じものが増えた側にあるか**を見る。言語ごとのコメント記号は並べない
+ *   （`# // -- ; % * ' " <!--` あたりを行頭の記号として一律に落とす）。
+ *   **1行でも一致すれば鳴らす。**全部が一致する必要はない（一部だけ隠す形もある）。
+ */
+export function removalWasJustCommentedOut(ctx) {
+  const 消え = removedTextThisTurn(ctx);
+  if (消え === null || 消え === '') return [];
+
+  // この回に増えた行を集める（消えた行の逆向き）
+  const log = Array.isArray(ctx?.editLog) ? ctx.editLog.filter((e) => e.turn === ctx.turnSeq) : [];
+  const 始 = new Map();
+  const 終 = new Map();
+  for (const e of log) {
+    if (e.big || e.before == null || e.after == null) return [];
+    if (!始.has(e.path)) 始.set(e.path, String(e.before));
+    終.set(e.path, String(e.after));
+  }
+  let 増え = '';
+  for (const [p, before] of 始) {
+    const after = 終.get(p) ?? '';
+    const 元 = new Map();
+    for (const l of before.split('\n')) 元.set(l, (元.get(l) || 0) + 1);
+    for (const l of after.split('\n')) {
+      const n = 元.get(l) || 0;
+      if (n > 0) 元.set(l, n - 1);
+      else 増え += `${l}\n`;
+    }
+  }
+  if (!増え) return [];
+
+  // 行頭のコメント記号と空白を落として比べる
+  const 裸 = (l) => l.replace(/^[\s]*(?:#+|\/\/+|--+|;+|%+|\*+|<!--)?[\s]*/, '').replace(/\s*(?:-->)?\s*$/, '');
+  const 増えた裸 = new Set(増え.split('\n').map(裸).filter((x) => x.length >= 3));
+  const 隠された = [];
+  for (const l of 消え.split('\n')) {
+    const b = 裸(l);
+    if (b.length >= 3 && 増えた裸.has(b) && !隠された.includes(b)) 隠された.push(b);
+  }
+  return 隠された;
+}
+
 export function removalClaimedButNothingRemoved(said, ctx) {
   if (!shouldCheckWork(said, ctx)) return false;
   // 削除を名乗っているか。動詞だけを見る（対象は見ない）
