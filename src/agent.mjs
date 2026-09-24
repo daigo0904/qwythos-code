@@ -1666,6 +1666,22 @@ export class Agent {
 // 正しく答えたあとに催促が出て、答えを打ち消す返事に化ける（実機で観測）。
 // 拾ってよいのは、コードの説明には現れない言い回しだけ。
 export function describesIntentWithoutActing(text) {
+  // **「〜してください」だけでは決まらない。**
+  //
+  //   「次に、テストを実行してください。」        → 押し返し。拾うべき
+  //   「削除しました。整合性を確認してください」 → 済んだあとの補足。拾ってはいけない
+  //
+  // 違いは**手を動かした報告が前にあるか**。それが無ければ、
+  // 「〜してください」は仕事を利用者に押し返している。
+  {
+    const 文ども = String(text ?? '').trim().split(/(?<=[。！？])\s*|(?<=[.!?])\s+|\n+/).filter((x) => x.trim());
+    const 相手への依頼 = /(?:てください|て下さい|てほしい|ていただけ)[。、！？!?]?\s*$/;
+    const 済んだ報告 =
+      /(?:修正|変更|削除|追加|作成|更新|置換|置き換え|書き換え|実装|反映|保存|適用|移動|除去|変換|生成)(?:し|いたし|され)(?:まし|た)|\bI (?:have )?(?:changed|edited|fixed|created|updated|added|removed|deleted|replaced|implemented|applied)\b/i;
+    if (文ども.some((x) => 相手への依頼.test(x.trim())) && 文ども.some((x) => 済んだ報告.test(x))) {
+      return false;
+    }
+  }
   const intent =
     /(\bI will\b|\bI'll\b|\blet me\b|\blet's\b|\bI am going to\b|\bI'm going to\b|\bnext,? I\b|please proceed|proceed with|\bStep 1\b|これから|次に|してください|していきます|してみます|しましょう|やります|する予定)/i;
   const done =
@@ -1942,7 +1958,7 @@ export function removalClaimNames(text) {
     // 名詞のまま使う形も受ける（2026-09-24・言い換えで実測）:
     //   「`X` の削除**により**、不要なコードが整理されました」
     //   「`X` の削除**が終わりました**」「削除**は**完了しました」
-    const ja = /^([\s\S]*?)(?:(?:削除|除去|消去)(?:(?:し|いたし|致し|され)(?:まし|た|て|、|。)|済み|(?:が|を|は)[^。]{0,8}(?:完了|終わ)|により|によって)|(?:取り除き|削り|消し)(?:まし|た|て))/.exec(s);
+    const ja = /^([\s\S]*?)(?:(?:削除|除去|消去)(?:(?:し|いたし|致し|され)(?:まし|た|て|、|。)|済み|(?:が|を|は)[^。]{0,8}(?:完了|終わ|行(?:い|っ))|により|によって)|(?:取り除き|削り|消し)(?:まし|た|て))/.exec(s);
     if (ja) 前から取る(ja[1]);
 
     // ── 英語：目的語は動詞の**後ろ**にある ──
@@ -2397,7 +2413,7 @@ export function removalClaimedButNothingRemoved(said, ctx) {
   if (!shouldCheckWork(said, ctx)) return false;
   // 削除を名乗っているか。動詞だけを見る（対象は見ない）
   const 削除の主張 =
-    /(削除|除去|消去|取り除)(?:し|いたし|致し|され)?(?:まし|済み|(?:が|を|は)[^。]{0,8}(?:完了|終わ)|により|によって)|(?:削り|消し)まし|\b(?:removed|deleted|dropped|stripped)\b|\b(?:removal|deletion)\s+of\b/i;
+    /(削除|除去|消去|取り除)(?:し|いたし|致し|され)?(?:まし|済み|(?:が|を|は)[^。]{0,8}(?:完了|終わ|行(?:い|っ))|により|によって)|(?:削り|消し)まし|\b(?:removed|deleted|dropped|stripped)\b|\b(?:removal|deletion)\s+of\b/i;
   if (!削除の主張.test(String(said ?? ''))) return false;
 
   // 打ち消している文は見ない（「削除できませんでした」で鳴らせない）
@@ -2523,6 +2539,17 @@ export function reportDisclaims(text) {
  */
 export function shouldCheckWork(said, ctx) {
   if (ctx?.requestIsQuestion) return false;
+
+  // **読んだ・調べただけの返事は、仕事の主張ではない。**
+  //   打ち消し側から見る門は「打ち消していなければ主張」と読むので、
+  //   「ファイル app.py を読み取りました。」も主張になってしまう（実測 2026-09-24）。
+  //   手を動かしたことを何も言っていない返事は、ここで落とす。
+  //   **全文がそれだけのときに限る。**「読み取りました。修正しました。」は主張である。
+  const 文 = String(said ?? '').trim().split(/(?<=[。！？])\s*|(?<=[.!?])\s+|\n+/).filter((x) => x.trim());
+  const 読んだだけ =
+    /^[^。]{0,60}(?:読み取り|読み込み|確認し|調べ|見まし|参照し|検索し|探し)(?:まし|た|ました)/;
+  if (文.length && 文.every((x) => 読んだだけ.test(x.trim()))) return false;
+
   // **「こう直すべきです」は主張ではない。**
   // 打ち消しだけを見る門は、助言も「やったと言っている」と読む。
   // 助手には専用の促し（recommendsWithoutActing）があるので、そちらに渡す。
