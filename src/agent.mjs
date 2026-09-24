@@ -2522,7 +2522,7 @@ export function reportDisclaims(text) {
   //   失敗を語っているのは「〜に失敗しました。」で文が終わるときか、
   //   「2回とも失敗」のように回数を伴うとき。そこだけ受ける。
   const 打ち消し =
-    /([ぁ-んァ-ヶ一-龠ー]ませんでした|[ぁ-んァ-ヶ一-龠ー]ません|ていません|ていない|なかったため|なかったので|未実施|未完了|未適用|まだです|反映されていません|一致せず|(?:に|は|も|が)失敗しました。?$|(?:全て|すべて|いずれも|2回とも|どちらも)[^。]{0,20}失敗|\bdid not\b|\bdoes not\b|\bdo not\b|\bhave not\b|\bhas not\b|\bcannot\b|\bcan not\b|\bcould not\b|\bwas not able\b|\bunable to\b|\bnot found\b|\bdoes not exist\b|\bno (change|edit|fix)s? (is|are|was|were) needed\b|\bnothing (was|has been) (changed|done)\b)/i;
+    /([ぁ-んァ-ヶ一-龠ー]ませんでした|[ぁ-んァ-ヶ一-龠ー]ません|ていません|ていない|なかったため|なかったので|未実施|未完了|未適用|未対応|まだです|反映されていません|一致せず|ておらず|ていません|のままで|のままです|元のまま|そのままで|変わっていません|(?:に|は|も|が)失敗しました。?$|(?:全て|すべて|いずれも|2回とも|どちらも)[^。]{0,20}失敗|\bdid not\b|\bdoes not\b|\bdo not\b|\bhave not\b|\bhas not\b|\bcannot\b|\bcan not\b|\bcould not\b|\bwas not able\b|\bunable to\b|\bnot found\b|\bdoes not exist\b|\bno (change|edit|fix)s? (is|are|was|were) needed\b|\bnothing (was|has been) (changed|done)\b)/i;
   const 文 = String(text ?? '').trim().split(/(?<=[。！？])\s*|(?<=[.!?])\s+|\n+/).filter((x) => x.trim());
   if (!文.length) return true;                  // 何も言っていないなら主張もしていない
   return !文.some((x) => !打ち消し.test(x));
