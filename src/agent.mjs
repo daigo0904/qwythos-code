@@ -555,6 +555,27 @@ export class Agent {
             }
           }
 
+          // 「消した」と言っているのに、**この回で1行も消えていない**場合。
+          //
+          // 上の2つは「消したと名乗った名前」を取り出してから照合するので、
+          // 名前が取れない報告（「不要なデバッグ用コードも削除しました」）は素通りする。
+          // **名前が何であれ、削除には消えた行が伴う。** そこだけ見る。
+          // これで「2つ主張して1つだけ本当にやる」形が閉じる（実測 2026-09-24）。
+          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+            if (removalClaimedButNothingRemoved(said, this.ctx)) {
+              nudges++;
+              info('消したと報告しましたが、この回は1行も消えていないので、促しました。');
+              this.messages.push({
+                role: 'user',
+                content:
+                  'You said you removed something, but not a single line was removed from any file this request. ' +
+                  'Whatever else you changed, nothing was deleted. ' +
+                  'Remove it now, or say plainly that it is still there.'
+              });
+              continue;
+            }
+          }
+
           // このお願いの中で**一度も通らなかったコマンド**があるのに、
           // 報告がそのことに一言も触れていない場合。
           //
@@ -2243,6 +2264,49 @@ export function claimedButNothingChanged(said, ctx) {
  *   （「config.json は書き換えました。sudo は通らなかったので反映はまだです」）は、
  *   ここで落ちる。**正しく手を止めた側を咎めないための条件。**
  */
+/**
+ * 「消した」と言っているのに、**この回で1行も消えていない**場合。
+ *
+ * ■ 対象を特定しなくても照合できる
+ *   `removalClaimsNotRemoved` は「消したと名乗った名前」を取り出してから照合する。
+ *   だから名前が取れない報告——「不要なデバッグ用コードも削除しました」
+ *   「終了コード1を返すエラーハンドリングの削除が完了しました」——は素通りする。
+ *   **名前が何であれ、削除には必ず「消えた行」が伴う。** そこだけ見る。
+ *
+ * ■ これが要る形（実測 2026-09-24）
+ *   「税率を10%に更新し、不要なデバッグ用コードも削除しました。」
+ *   税率は本当に直した。だから `changedThisTurn` は空ではなく、
+ *   「何も変わっていない」系の見張りは全部黙る。
+ *   **2つ主張して1つ本当にやれば通る**という穴が、ここで閉じる。
+ *
+ * ■ 鳴らせてはいけない場合
+ *   1行でも消えていれば鳴らさない。消したものが言っているものと違うかは、
+ *   `removalClaimsNotRemoved` と `removalClaimsStillPresent` の担当。
+ *   ここは「そもそも何も消えていない」だけを見る。
+ *   中身を控えていない書き換え（big）が混ざっていたら確かめようがないので黙る。
+ */
+export function removalClaimedButNothingRemoved(said, ctx) {
+  if (!shouldCheckWork(said, ctx)) return false;
+  // 削除を名乗っているか。動詞だけを見る（対象は見ない）
+  const 削除の主張 =
+    /(削除|除去|消去|取り除)(?:し|いたし|致し|され)?(?:まし|済み|(?:が|を)完了)|(?:削り|消し)まし|\b(?:removed|deleted|dropped|stripped)\b/i;
+  if (!削除の主張.test(String(said ?? ''))) return false;
+
+  // 打ち消している文は見ない（「削除できませんでした」で鳴らせない）
+  const 文 = String(said ?? '').split(/(?<=[。！？])\s*|(?<=[.!?])\s+|\n+/).filter((x) => x.trim());
+  if (!文.some((x) => 削除の主張.test(x) && !reportDisclaims(x))) return false;
+
+  const 消え = removedTextThisTurn(ctx);
+  if (消え === null) return false;          // 確かめようがない
+  // **行数で見る。中身が空でも「消えた」である。**
+  //   `trim() === ''` で見ていたら、**空行を1つ消した回**を「何も消えていない」と読み、
+  //   実際に削除している正直な報告を咎めた（種で実測 2026-09-24）。
+  //   空行の削除も削除なので、ここは行が1つでもあれば黙る。
+  // `removedTextThisTurn` は、消えた行を1行ずつ改行付きで返す。
+  // **空文字なら1行も消えていない。**空行を消した回は "\n" が返るので、ここは通らない。
+  return 消え === '';
+}
+
 export function claimedCommandNeverRan(said, ctx) {
   if (!shouldCheckWork(said, ctx)) return [];
   const 通らず = commandsNeverRan(ctx);
