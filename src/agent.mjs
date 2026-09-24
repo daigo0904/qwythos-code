@@ -1939,7 +1939,10 @@ export function removalClaimNames(text) {
     //   削除が**正常に**完了しました  … 「が完了」の間に語が挟まる
     //   削除**した**ため              … まし が無い（連体・理由）
     //   削除**して**再度…            … 連用形で次へ続く
-    const ja = /^([\s\S]*?)(?:(?:削除|除去|消去)(?:(?:し|いたし|致し|され)(?:まし|た|て|、|。)|済み|(?:が|を)[^。]{0,8}完了)|(?:取り除き|削り|消し)(?:まし|た|て))/.exec(s);
+    // 名詞のまま使う形も受ける（2026-09-24・言い換えで実測）:
+    //   「`X` の削除**により**、不要なコードが整理されました」
+    //   「`X` の削除**が終わりました**」「削除**は**完了しました」
+    const ja = /^([\s\S]*?)(?:(?:削除|除去|消去)(?:(?:し|いたし|致し|され)(?:まし|た|て|、|。)|済み|(?:が|を|は)[^。]{0,8}(?:完了|終わ)|により|によって)|(?:取り除き|削り|消し)(?:まし|た|て))/.exec(s);
     if (ja) 前から取る(ja[1]);
 
     // ── 英語：目的語は動詞の**後ろ**にある ──
@@ -1949,6 +1952,21 @@ export function removalClaimNames(text) {
     // 受け身の言い方は、名前が動詞より前に来る。「`X` has been removed」
     const passive = /[`'"]([^`'"\n]{1,60})[`'"][^`'"\n]{0,60}\b(?:has|have|was|were|is|are)\s+(?:been\s+)?(?:[a-z]+ly\s+)?(?:removed|deleted|dropped|stripped)\b/i.exec(s);
     if (passive) 足す(passive[1]);
+
+    // 名詞化。「The removal of `X` has been successful」「Deletion of `X` is done」
+    // 名詞化。「The removal of the duplicate `X` from …」
+    // of と名前の間に語が挟まる（the duplicate / the unused …）ので、
+    // **囲みがあればそれを優先し、無ければ of のあとの最後の語**を取る。
+    const 名詞化 = /\b(?:removal|deletion|removing|deleting)\s+of\s+([^\n]{1,80}?)\s+(?:from|has|have|is|was|were)\b/i.exec(s);
+    if (名詞化) {
+      const 部分 = 名詞化[1];
+      const 囲み = [...部分.matchAll(/[`'"]([^`'"\n]{1,60})[`'"]/g)].map((x) => x[1]);
+      if (囲み.length) 足す(囲み[囲み.length - 1]);
+      else {
+        const 語 = 部分.trim().split(/\s+/);
+        足す(語[語.length - 1]);
+      }
+    }
   }
   return out;
 }
@@ -2379,7 +2397,7 @@ export function removalClaimedButNothingRemoved(said, ctx) {
   if (!shouldCheckWork(said, ctx)) return false;
   // 削除を名乗っているか。動詞だけを見る（対象は見ない）
   const 削除の主張 =
-    /(削除|除去|消去|取り除)(?:し|いたし|致し|され)?(?:まし|済み|(?:が|を)完了)|(?:削り|消し)まし|\b(?:removed|deleted|dropped|stripped)\b/i;
+    /(削除|除去|消去|取り除)(?:し|いたし|致し|され)?(?:まし|済み|(?:が|を|は)[^。]{0,8}(?:完了|終わ)|により|によって)|(?:削り|消し)まし|\b(?:removed|deleted|dropped|stripped)\b|\b(?:removal|deletion)\s+of\b/i;
   if (!削除の主張.test(String(said ?? ''))) return false;
 
   // 打ち消している文は見ない（「削除できませんでした」で鳴らせない）
