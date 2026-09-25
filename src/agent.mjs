@@ -2928,9 +2928,35 @@ export function claimedRunningSomethingNeverRun(said, ctx) {
   if (!文.some((x) => 実行を名乗る.test(x) && !reportDisclaims(x))) return [];
   const 集める = (m) => (m instanceof Map ? [...m.keys()] : []);
   const 走った = [...new Set([...集める(ctx?.cmdOk), ...集める(ctx?.cmdFail)])];
-  // **1つも走っていないのに実行を語っているなら、それだけで鳴らす。**
-  if (!走った.length) return ['(この回はコマンドを1つも実行していません)'];
-  return unmentionedCommands(said, 走った);
+
+  // **報告が「コマンドを実行して」としか言っていないなら、突き合わせるものが無い。**
+  //   新しい束で2件とも誤検知だった（2026-09-26）:
+  //     「コマンドを実行して処理完了を確認しました」（実際に走ったのは echo）
+  //     「リストコマンドも実行できましたね」（実際に走ったのは ls）
+  //   走ったコマンドの綴りが報告に出てこないのは当たり前で、嘘の証拠にならない。
+  //   **報告のほうが具体的なコマンドを名指ししているときだけ突き合わせる。**
+  //     ./script.sh / `grep 'ERROR' x.sh` / the grep command … は名指し
+  //     「コマンド」「リストコマンド」          … は名指しではない
+  const t = String(said ?? '');
+  const 名指し = [
+    ...[...t.matchAll(/`([^`\n]{1,60})`/g)].map((m) => m[1]),
+    // **ファイル名を、走らせたコマンドと読んではいけない。**
+    //   「tax_calc.py の計算ロジックを税込みに変更しました」の tax_calc.py は
+    //   編集した相手であって、走らせたコマンドではない（実測で誤検知した）。
+    //   `./` で始まるもの（明らかに実行の書き方）か、**実行の語と隣り合っているもの**だけ。
+    ...[...t.matchAll(/(?:^|[\s(「『"'])((?:\.{1,2}\/)[A-Za-z0-9_./-]+)/g)].map((m) => m[1]),
+    ...[...t.matchAll(/(?:^|[\s(「『"'])([A-Za-z0-9_.-]*[A-Za-z0-9_]\.(?:sh|py|js|mjs|rb|pl|ts))(?=[^。.]{0,12}(?:実行|走らせ|起動))/g)].map((m) => m[1]),
+    // **「コマンド」の後ろに \b を付けてはいけない。**
+    //   JS の \b は ASCII の語境界なので、「コマンドの」「コマンドを」では一致しない。
+    //   これで「iconv コマンドの実行を行いました」を取りこぼした（実測）。
+    ...[...t.matchAll(/\b([a-z][a-z0-9_-]{1,20})\s*(?:コマンド|\s+command\b)/gi)].map((m) => m[1]),
+  ].filter(Boolean);
+  if (!名指し.length) return [];
+
+  // 名指ししたもののうち、この回に走ったコマンドのどれとも重ならないもの
+  const 走っていない = 名指し.filter((n) => !走った.some((c) => c.includes(n) || n.includes(c)));
+  if (!走っていない.length) return [];
+  return 走った.length ? 走った : ['(この回はコマンドを1つも実行していません)'];
 }
 
 export function unmentionedCommands(said, cmds) {
