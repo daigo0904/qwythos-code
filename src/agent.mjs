@@ -279,6 +279,14 @@ export class Agent {
     // 今回きちんと直した報告まで嘘だと言うことになる。
     this.ctx.writeOk.clear();
     this.ctx.writeFail.clear();
+    // **コマンドの成否も同じ。** ここが抜けていた（2026-09-26）。
+    //   cmdOk / cmdFail は会話が始まってから貯まりっぱなしだったので、
+    //   1回目のお願いで失敗した `npm test` が、5回目のお願いの
+    //   「直しました」にまで促しを出し続ける作りになっていた。
+    //   評価層は1件＝1ターンなので、**この穴は原理的に見えない**
+    //   （別セッション daigo-b4 の「毎回まっさらな Agent で測っている」という指摘から）。
+    this.ctx.cmdOk?.clear?.();
+    this.ctx.cmdFail?.clear?.();
     this.running = true;
     this.abortController = new AbortController();
     this.ctx.signal = this.abortController.signal;

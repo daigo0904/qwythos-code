@@ -3527,6 +3527,25 @@ console.log('\n直したという報告を、数で確かめる');
   check('失敗が無ければ鳴らない', commandsNeverRan({ cmdFail: new Map(), cmdOk: new Map() }).length === 0);
   check('古い ctx でも落ちない', commandsNeverRan({}).length === 0 && commandsNeverRan(null).length === 0);
 
+  // **前のお願いの失敗を、次のお願いに持ち越さない。**
+  //   cmdOk / cmdFail は会話が始まってから貯まりっぱなしだった。
+  //   1回目で失敗した `npm test` が、5回目の「直しました」にまで促しを出し続ける。
+  //   評価層は1件＝1ターンなので、**この穴は評価層では原理的に見えない**。
+  //   だから、ここ（本番の試験）で塞ぐ。
+  {
+    const 作る = () => ({
+      changedFiles: new Set(), readFiles: new Set(), editFailures: new Map(),
+      writeOk: new Map(), writeFail: new Map(),
+      cmdOk: new Map(), cmdFail: new Map(), mutations: 0, todos: [], editLog: [], turnSeq: 0,
+    });
+    const ctx = 作る();
+    ctx.cmdFail.set('npm test', 1);
+    check('お願いをまたぐ前は、失敗が残っている', commandsNeverRan(ctx).length === 1);
+    // runTurn の頭でやっているのと同じ後始末
+    ctx.writeOk.clear(); ctx.writeFail.clear(); ctx.cmdOk.clear(); ctx.cmdFail.clear();
+    check('次のお願いには持ち越さない', commandsNeverRan(ctx).length === 0);
+  }
+
   // 報告が触れているかは、**名前が出ているかどうかだけ**で見る。
   // 言い回しを並べる判定は、並べた人の想像力が上限になる。
   check(
