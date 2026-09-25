@@ -1035,7 +1035,17 @@ const runCommand = {
     // 「実行しました」という報告が本当かどうかは、これでしか確かめられない。
     ctx.mutations = (ctx.mutations || 0) + 1;
     // **通ったか通らなかったかも残す。**mutations は走らせたことしか言わない。
-    countCommand(ctx, command, !result.timedOut && result.code === 0);
+    // **「見つからなかった」は失敗ではない。**
+    //   grep / rg / find は、一致が無いと終了コード1を返す。
+    //   ls は無いファイルを指すと1を返す。diff は違いがあると1を返す。
+    //   どれも道具としては正常に動いていて、答えが「無い」だけである。
+    //   ここを失敗として数えていたので、
+    //   「`secret` を探しましたが、見つかりませんでした」と**正しく報告した回**を
+    //   「通らなかったコマンドに触れていない」で咎めていた（実測 2026-09-25・2件）。
+    //   通ったかどうかは、**道具が動いたか**で数える。
+    const 答えが無いだけ =
+      result.code === 1 && /^(?:grep|rg|egrep|fgrep|find|fd|diff|ls|test|\[)/.test(command.trim());
+    countCommand(ctx, command, !result.timedOut && (result.code === 0 || 答えが無いだけ));
     const body = result.output.trim() || '(no output)';
     const status = result.timedOut
       ? `Command timed out after ${timeoutMs} ms and was killed.`
