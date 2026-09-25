@@ -232,6 +232,9 @@ export class Agent {
     // 依頼を書くのは利用者なので、モデルを差し替えても変わらない。
     // 雑談と見たときも同じ扱い（そちらは shouldNudgeToAct が別に落とす）。
     this.ctx.requestIsQuestion = requestIsQuestion(userInput);
+    // 依頼そのものを残す。見張りが「何を頼まれたか」を見る必要がある
+    // （空行の削除を頼まれたのか、関数の削除を頼まれたのか、で意味が逆になる）。
+    this.ctx.requestText = String(userInput ?? "");
 
     let facts = '';
     this.ctx.missingFromRequest = [];
@@ -2423,7 +2426,7 @@ export function removalClaimedButNothingRemoved(said, ctx) {
   if (!shouldCheckWork(said, ctx)) return false;
   // 削除を名乗っているか。動詞だけを見る（対象は見ない）
   const 削除の主張 =
-    /(削除|除去|消去|取り除)(?:し|いたし|致し|され)?(?:まし|済み|(?:が|を|は)[^。]{0,8}(?:完了|終わ|行(?:い|っ))|により|によって)|(?:削り|消し)まし|\b(?:removed|deleted|dropped|stripped)\b|\b(?:removal|deletion)\s+of\b/i;
+    /(削除|除去|消去|取り除)(?:し|いたし|致し|され)?(?:まし|済み|、|(?:が|を|は)[^。]{0,8}(?:完了|終わ|行(?:い|っ))|により|によって)|(?:削り|消し)まし|\b(?:removed|deleted|dropped|stripped)\b|\b(?:removal|deletion)\s+of\b/i;
   if (!削除の主張.test(String(said ?? ''))) return false;
 
   // 打ち消している文は見ない（「削除できませんでした」で鳴らせない）
@@ -2436,9 +2439,23 @@ export function removalClaimedButNothingRemoved(said, ctx) {
   //   `trim() === ''` で見ていたら、**空行を1つ消した回**を「何も消えていない」と読み、
   //   実際に削除している正直な報告を咎めた（種で実測 2026-09-24）。
   //   空行の削除も削除なので、ここは行が1つでもあれば黙る。
-  // `removedTextThisTurn` は、消えた行を1行ずつ改行付きで返す。
-  // **空文字なら1行も消えていない。**空行を消した回は "\n" が返るので、ここは通らない。
-  return 消え === '';
+  // 消えた行は1行ずつ改行付きで返ってくる。
+  //
+  // **中身のある行が1つも消えていなければ、何も削除していない。**
+  //   空行を見て「消えた」と数えると、「文字コード変換用の関数を削除し…」と
+  //   報告して**空行を1つ消しただけ**の回を見逃す（実測 2026-09-25）。
+  //   逆に、空行の削除そのものを咎めてもいけない（種で誤検知した）。
+  //   だから「空行を除いて1行でも消えたか」で見る。
+  const 中身のある行 = 消え.split("\n").filter((x) => x.trim() !== "");
+  if (中身のある行.length) return false;   // 中身のある行が消えている
+
+  // **空行しか消えていないとき、嘘かどうかは依頼で決まる。**
+  //   依頼「余分な空行を1つ減らして」→ 空行を消した = 正しい仕事
+  //   依頼「文字コード変換用の関数を削除して」→ 空行しか消えていない = 嘘
+  //   同じ世界の状態でも、求められたものが違えば意味が逆になる。
+  //   空行そのものを頼まれていたなら、鳴らさない。
+  const 空行を頼まれた = /(空行|空白行|blank line|empty line)/.test(String(ctx?.requestText ?? ""));
+  return !空行を頼まれた;
 }
 
 export function claimedCommandNeverRan(said, ctx) {
