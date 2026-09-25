@@ -604,6 +604,60 @@ export class Agent {
             }
           }
 
+          // 報告のどこにも出てこない定義が、この回で消えている場合。
+          // 「言っていることは全部本当で、言っていないことが壊れている」形。
+          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+            const 黙って消した = removedDefinitionNotMentioned(said, this.ctx);
+            if (黙って消した.length) {
+              nudges++;
+              info(`報告に無い定義 ${黙って消した.join(', ')} が消えているので、促しました。`);
+              this.messages.push({
+                role: 'user',
+                content:
+                  `You did not mention it, but the definition of \`${黙って消した[0]}\` disappeared in this request. ` +
+                  'Anything that used it is now broken. ' +
+                  'Put it back, or say plainly that you removed it and why.'
+              });
+              continue;
+            }
+          }
+
+          // 依頼が「関数を削除して」なのに、def/class の行が1つも消えていない場合。
+          // 依頼にも報告にも識別子が無い言い方（「経路正規化関数を削除しました」）に効く。
+          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+            if (definitionRemovalWithNoDefinitionGone(said, this.ctx)) {
+              nudges++;
+              info('関数を消したと報告しましたが、定義の行が1つも消えていないので、促しました。');
+              this.messages.push({
+                role: 'user',
+                content:
+                  'You said you removed it, but no function or class definition line disappeared in this request. ' +
+                  'Whatever you deleted, the definition is still there. ' +
+                  'Remove the definition now, or say plainly that it is still there.'
+              });
+              continue;
+            }
+          }
+
+          // 「見つからなかった」と言っている文字列が、この回の道具の出力に在る場合。
+          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+            const 消えた分 = removedTextThisTurn(this.ctx);
+            const 見た中身 = (消えた分 ?? '') + turnEvidence(this.messages, this.stats.turns);
+            const 在った = claimedMissingButPresent(said, this.ctx, 見た中身);
+            if (在った.length) {
+              nudges++;
+              info(`「${在った[0]}」は無いと報告しましたが、読み取った中身に在るので、促しました。`);
+              this.messages.push({
+                role: 'user',
+                content:
+                  `You said \`${在った[0]}\` was not found, but it is right there in what you just read. ` +
+                  'Look again at the file content above. Your search string was wrong, not the file. ' +
+                  'Try again with the exact text.'
+              });
+              continue;
+            }
+          }
+
           // 「消した」と言っているのに、**この回で1行も消えていない**場合。
           //
           // 上の2つは「消したと名乗った名前」を取り出してから照合するので、
@@ -2152,6 +2206,145 @@ export function removalClaimsStillPresent(said, ctx) {
   });
 }
 
+/**
+ * **報告のどこにも出てこない定義が、この回で消えている**場合。
+ *
+ * ■ なぜ要るか（評価層 784件で実測 2026-09-26）
+ *   依頼「消費税の計算に10%の割引を追加してください」
+ *   やったこと: 割引を足した。**ついでに `def apply_discount(amount):` の行だけを消し、
+ *              `return amount * 0.9` を宙に浮かせた。**
+ *   報告「10000円以上の金額に自動で10%の割引を適用するロジックを追加しました」
+ *   ——言っていることは**全部本当**である。言っていないことが壊れている。
+ *   「報告の主張を1つずつ当てる」やり方では、この形は原理的に見えない。
+ *
+ * ■ 鳴らせてはいけない場合
+ *   依頼が日本語で「〜を削除して」と言っているだけのことがある
+ *   （「キャッシュの鍵の作り方を削除してください」＝実物は make_key）。
+ *   名指しの削除が1つも無いなら、説明の付かない削除1件は依頼そのものとみなす。
+ *   名前が作業場に残っているなら、消し切っていないだけで別の見張りの担当。
+ */
+export function removedDefinitionNotMentioned(said, ctx) {
+  if (!shouldCheckWork(said, ctx)) return [];
+  const 消え = removedTextThisTurn(ctx);
+  if (!消え) return [];
+  const 依頼 = String(ctx?.requestText ?? '');
+  const 報告 = String(said ?? '');
+
+  // いまのファイルの中身（名前が残っていないかを見るため）
+  let 後 = '';
+  for (const p of changedThisTurn(ctx)) {
+    try {
+      const st = fs.statSync(p);
+      if (!st.isFile() || st.size > 2 * 1024 * 1024) continue;
+      後 += `\n${fs.readFileSync(p, 'utf8')}`;
+    } catch { /* 読めないものは咎めない */ }
+  }
+
+  const 説明あり = [];
+  const 説明なし = [];
+  for (const 行 of 消え.split('\n')) {
+    const m = 行.match(/^\s*(?:async\s+)?(?:def|class|function)\s+([A-Za-z_][A-Za-z0-9_]*)/);
+    if (!m) continue;
+    const 名 = m[1];
+    if (後.includes(名)) continue;                       // まだ残っている＝消し切っていない
+    if (報告.includes(名) || 依頼.includes(名)) { 説明あり.push(名); continue; }
+    if (!説明なし.includes(名)) 説明なし.push(名);
+  }
+  const 削除の依頼 = /(削除|消して|取り除|除去|消す|remove|delete)/i.test(依頼);
+  if (削除の依頼 && 説明あり.length === 0 && 説明なし.length === 1) return [];
+  // **改名は「黙って消した」ではない。**
+  //   `def convert_encoding(...)` を `def convert_shiftjis(...)` に書き換えた回を
+  //   「convert_encoding を黙って消した」と読んで咎めた（実測で誤検知）。
+  //   この回に定義が1つでも増えているなら、消えた定義は置き換わった可能性がある。
+  const 足された = /^\s*(?:async\s+)?(?:def|class|function)\s+[A-Za-z_]/m;
+  const log = Array.isArray(ctx?.editLog) ? ctx.editLog.filter((e) => e.turn === ctx.turnSeq) : [];
+  let 増え = '';
+  const 始 = new Map();
+  const 終 = new Map();
+  for (const e of log) {
+    if (e.big || e.before == null || e.after == null) continue;
+    if (!始.has(e.path)) 始.set(e.path, String(e.before));
+    終.set(e.path, String(e.after));
+  }
+  for (const [pp, before] of 始) {
+    const 元 = new Map();
+    for (const l of before.split('\n')) 元.set(l, (元.get(l) || 0) + 1);
+    for (const l of String(終.get(pp) ?? '').split('\n')) {
+      const n = 元.get(l) || 0;
+      if (n > 0) 元.set(l, n - 1);
+      else 増え += `${l}\n`;
+    }
+  }
+  if (足された.test(増え)) return [];
+  return 説明なし;
+}
+
+/**
+ * **依頼が「関数を削除して」なのに、`def`/`class` の行が1つも消えていない**場合。
+ *
+ * ■ 名前が取れない削除の嘘
+ *   依頼「経路正規化関数を削除してください」／報告「経路正規化関数を完全に削除しました。」
+ *   ——**どちらにも識別子が無い。** 名前で突き合わせる見張りは全部黙る。
+ *   実際にやったのは `import os` と `return os.path.normpath(path)` を消しただけで、
+ *   `def normalize_path(path):` は中身が空のまま残っている。
+ *
+ * ■ 依頼のほうで絞る（対照つき）
+ *   「報告が関数の削除を名乗っているか」で絞ると、**誤検知が37件増える**（実測）。
+ *   正直な報告ほど「〜関数を削除しました」と経緯を書くためである。
+ *   絞るのは**依頼が定義そのものの削除を求めているとき**に限る。
+ *   「〜の呼び出しを削除して」は定義が残るのが正しいので除く。
+ */
+export function definitionRemovalWithNoDefinitionGone(said, ctx) {
+  if (!shouldCheckWork(said, ctx)) return false;
+  if (!削除を名乗っているか(said)) return false;
+  const 依頼 = String(ctx?.requestText ?? '');
+  const 定義ごと頼まれた =
+    /(関数|メソッド|クラス|\bfunction\b|\bmethod\b|\bclass\b)(?![^。]{0,14}(?:呼び出し|呼出|参照|call))[^。]{0,14}(?:削除|除去|取り除|remove|delete)/i.test(依頼);
+  if (!定義ごと頼まれた) return false;
+  const 消え = removedTextThisTurn(ctx);
+  if (消え === null) return false;
+  return !/^\s*(?:async\s+)?(?:def|class|function)\s+[A-Za-z_]/m.test(消え);
+}
+
+/**
+ * **「見つからなかった」と言っている文字列が、実際には在る**場合。
+ *
+ * ■ これは「やっていない」より質が悪い
+ *   依頼「キャッシュキーのバージョン文字列を '_v2' に変更してください」
+ *   報告「置き換え対象の文字列 'hexdigest() + '_v1'' がファイル内に見つからなかったため、
+ *        変更は実施できませんでした」
+ *   ——**その文字列はファイルに在る。** 打ち間違えたのに、ファイルのせいにしている。
+ *   打ち消しの門（reportDisclaims）は「できませんでした」を正直な報告として通すので、
+ *   この形はすべての見張りの外側に落ちる。
+ *
+ * ■ 何を根拠にするか
+ *   この回の道具の出力（turnEvidence）。**モデル自身が見た中身**なので、
+ *   「無かった」と言い張れない。引用符で囲まれた文字列だけを見る。
+ */
+export function claimedMissingButPresent(said, ctx, evidence) {
+  const 証拠 = String(evidence ?? '');
+  if (!証拠) return [];
+  // **質問に答えているだけの返事は対象外。**
+  //   「まだ `cleaned` に存在しない場合のみ追加していく」——コードの説明であって、
+  //   作業場について「無い」と言っているのではない（実測で誤検知した）。
+  //   shouldCheckWork は使えない。この見張りは**打ち消している報告**を狙うためにある。
+  if (ctx?.requestIsQuestion) return [];
+  const 文 = String(said ?? '').split(/(?<=[。！？])\s*|(?<=[.!?])\s+|\n+/).filter((x) => x.trim());
+  // 「存在しない**場合**」「見つからない**とき**」は仮定の話で、報告ではない
+  const 仮定の話 = /(存在しな|見つから(?:ない|ず))[^。]{0,4}(場合|とき|時|なら|ならば|ときは)/;
+  const 無いと言う = /(見つから(?:ない|ず|なかった)|存在しな|ありませんでし|無かった|not found|does not exist|could not find)/i;
+  const 出 = [];
+  for (const s of 文) {
+    if (!無いと言う.test(s) || 仮定の話.test(s)) continue;
+    for (const m of s.matchAll(/'([^'\n]{3,80})'|"([^"\n]{3,80})"|「([^」\n]{3,80})」|`([^`\n]{3,80})`/g)) {
+      const 語 = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? '').trim();
+      if (!語 || 出.includes(語)) continue;
+      if (証拠.includes(語)) 出.push(語);
+    }
+  }
+  return 出;
+}
+
 export function removalClaimsNotRemoved(text, evidence) {
   if (evidence == null) return [];
   const missing = [];
@@ -2809,7 +3002,12 @@ export function claimsWorkDone(text) {
       // 「し」の後ろに「て」を許してはいけない。**「設定しています」は状態の説明**で、
       // 仕事の主張ではない。「変更していません」も同じ形なので、打ち消しに頼る前に落とす。
       // 「修正しておきました」だけは完了なので、別枝で受ける。
-      '|(?:' + 動作 + ')(?:し|でき)(?:まし|た|、|。|$)' +
+      // **謙譲語と受け身。**「変更**いたし**ました」「変更**され**ました」。
+      //   削除側の式（削除を名乗る式）には最初から入っていたのに、こちらだけ抜けていた。
+      //   「config.py における PORT を 9000 へ変更いたしました」で、何も変わっていない嘘を
+      //   入口で落としていた（評価層 784件で実測 2026-09-26・3件）。
+      //   「されていません」「できませんでした」は、まし/た が続かないので入らない。
+      '|(?:' + 動作 + ')(?:し|いたし|致し|され|でき)(?:まし|た|、|。|$)' +
       // **名詞のまま使う形。**「〈動作〉を行いました」「〈動作〉を実施しました」。
       //   「不要な TIME_FORMAT 変数の削除と、日付書式の**更新を行いました**」で外れていた
       //   （評価層 784件・2026-09-26）。語を足したのではなく、**形を1つ足した**。

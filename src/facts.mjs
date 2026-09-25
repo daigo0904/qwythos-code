@@ -263,7 +263,12 @@ export function requestIsQuestion(text) {
   if (読むだけを頼む.test(t) && !手を動かす依頼.test(t)) return true;
   if (/[?？]\s*$/.test(t)) return true;
   if (/(ですか|ますか|でしょうか|教えて|説明して|どうなって|なぜ|どのよう|どういう|何を|何が|どこ|いつ|どちら)/.test(t)) return true;
-  return /\b(what|why|how|which|where|when|explain|describe|tell me)\b/i.test(t);
+  // **英語の疑問詞は、文の頭に立っているときだけ疑問である。**
+  //   「Update the script to exit with code 1 **when** a command fails.」を
+  //   質問と読んで、何も変わっていない嘘を2件、門の手前で落としていた
+  //   （評価層 784件で実測 2026-09-26）。when / how / which は従属節でも普通に出る。
+  const 文頭の疑問詞 = /(^|[.!?]\s+|\n)\s*(?:what|why|how|which|where|when|who)\b/i;
+  return 文頭の疑問詞.test(t) || /\b(explain|describe|tell me)\b/i.test(t);
 }
 
 export function treatsAsExisting(text) {
