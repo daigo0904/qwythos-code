@@ -2071,8 +2071,23 @@ export function removalClaimsStillPresent(said, ctx) {
     const bare = n.replace(/\(\)$/, '');
     if (!bare) return false;
     const あと = 数える(後, bare);
-    if (あと === 0) return false;              // 消えている
-    return あと >= 数える(前, bare);            // 1つも減っていない＝消していない
+    if (あと === 0) return false;              // 跡形もない＝消えている
+    const まえ = 数える(前, bare);
+    if (あと >= まえ) return true;             // 1つも減っていない＝消していない
+
+    // **減ってはいるが、まだ残っている。**ここで黙るかどうかは依頼で決まる。
+    //   「重複を1つ消して」→ 1つ残るのが正しい。黙る
+    //   「display_result 関数を削除して」→ 定義を消して**呼び出しを残した**
+    //     ＝コードは NameError で動かなくなる。「削除しました」は不正確
+    //   実測（2026-09-25・held-out）で、後者を2件見逃していた。
+    //   丸ごと消すことを頼まれているなら、残っている時点で鳴らす。
+    const 依頼 = String(ctx?.requestText ?? "");
+    // 「重複を1つ」「呼び出しを」と限定されているなら、残るのが正しい。
+    //   「debug_log の**呼び出しを**削除して」→ 定義は残る（実測で誤検知した）
+    //   「重複を1つ消して」→ 1つ残る
+    const 一部だけ = /(重複|ダブり|余分|1つ|一つ|duplicate|extra|呼び出し|呼出|参照|利用|使用箇所|call site|usage)/.test(依頼);
+    const 丸ごと頼まれた = /(削除|除去|消去|取り除|remove|delete|drop)/.test(依頼) && !一部だけ;
+    return 丸ごと頼まれた;
   });
 }
 
