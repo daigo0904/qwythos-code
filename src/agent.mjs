@@ -666,6 +666,24 @@ export class Agent {
             }
           }
 
+          // 定義を消したのに、それを呼んでいる側が残っている場合。
+          // 「消した」のは本当なのに、コードは動かなくなっている。
+          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+            const 宙に浮いた = removedDefinitionStillCalled(said, this.ctx);
+            if (宙に浮いた.length) {
+              nudges++;
+              info(`${宙に浮いた[0]} の定義を消しましたが、呼び出しが残っているので、促しました。`);
+              this.messages.push({
+                role: 'user',
+                content:
+                  `You removed the definition of \`${宙に浮いた[0]}\`, but something still refers to it. ` +
+                  'The code will fail with a NameError as it stands. ' +
+                  'Remove the remaining uses too, or put the definition back.'
+              });
+              continue;
+            }
+          }
+
           // 「消した」と言っているのに、**この回で1行も消えていない**場合。
           //
           // 上の2つは「消したと名乗った名前」を取り出してから照合するので、
@@ -2057,7 +2075,15 @@ export function removalClaimNames(text) {
     if (bq.length) return 足す(bq[bq.length - 1]);
     const q = [...前.matchAll(/['"]([^'"\n]{1,60})['"]/g)].map((x) => x[1]);
     if (q.length) return 足す(q[q.length - 1]);
+    // **語の切れ目で切らないと、`UTF-8` から `UTF` を識別子として拾う。**
+    //   報告「UTF-8に変換する関数を削除しました」で `UTF` を削除対象の名前とみなし、
+    //   「UTF が差分に無い」と咎めた（held-out G3 で実測 2026-09-26）。
+    //   本番では同じ形で 2026-09-10 に事故を起こしている
+    //   （JavaScript / utf8 / Python3 を識別子と読んで書き換えが8件中7件止まった）。
+    //   あのときの直しは別の経路にだけ入っていて、ここには入っていなかった。
+    //   ハイフンで続いている語は、識別子ではなく綴りの一部である。
     const id = [...前.matchAll(/[A-Za-z_][A-Za-z0-9_]{2,}(?:\.[A-Za-z0-9_]+)*/g)]
+      .filter((x) => 前[x.index - 1] !== '-' && 前[x.index + x[0].length] !== '-')
       .map((x) => x[0])
       .filter(名前らしい);
     if (id.length) 足す(id[id.length - 1]);
@@ -2349,6 +2375,58 @@ export function claimedMissingButPresent(said, ctx, evidence) {
       if (!語 || 出.includes(語)) continue;
       if (証拠.includes(語)) 出.push(語);
     }
+  }
+  return 出;
+}
+
+/**
+ * **定義を消したのに、それを呼んでいる側が残っている**場合。
+ *
+ * ■ なぜ要るか（held-out G3 で実測 2026-09-26）
+ *   依頼「文字コードの変換関数を削除してください」
+ *   やったこと: `def convert_to_utf8(text):` とその本体を消した。
+ *   **ところが `main()` の中の `convert_to_utf8(input_text)` は残っている。**
+ *   報告「文字コードの変換関数を削除しました」——**消したのは本当**である。
+ *   本当なのに、コードは NameError で動かなくなった。
+ *
+ * ■ 名前を報告から取らない
+ *   報告にも依頼にも識別子が無い（「文字コードの変換関数」）。
+ *   **消えた行のほうに名前が書いてある。** そちらから取る。
+ *
+ * ■ 「消した」と言っているかどうかも見ない
+ *   定義を消して呼び出しを残したら、何と報告していようと壊れている。
+ *
+ * ■ 鳴らせてはいけない場合
+ *   同じターンで同じ名前の定義を書き直している（移動・書き換え）。
+ *   名前が残っているのがコメントや文字列だけ、は区別しない（行として残っていれば鳴らす）。
+ */
+export function removedDefinitionStillCalled(said, ctx) {
+  const 消え = removedTextThisTurn(ctx);
+  if (!消え) return [];
+  const 変えた = [...changedThisTurn(ctx)];
+  if (!変えた.length) return [];
+
+  let 後 = '';
+  for (const p of 変えた) {
+    try {
+      const st = fs.statSync(p);
+      if (!st.isFile() || st.size > 2 * 1024 * 1024) continue;
+      後 += `\n${fs.readFileSync(p, 'utf8')}`;
+    } catch { /* 読めないものは咎めない */ }
+  }
+  if (!後) return [];
+
+  const 出 = [];
+  for (const 行 of 消え.split('\n')) {
+    const m = 行.match(/^\s*(?:async\s+)?(?:def|class|function)\s+([A-Za-z_][A-Za-z0-9_]*)/);
+    if (!m) continue;
+    const 名 = m[1];
+    if (出.includes(名)) continue;
+    // 定義そのものが書き直されているなら、消したのではなく動かした
+    if (new RegExp(`(?:^|\\n)\\s*(?:async\\s+)?(?:def|class|function)\\s+${名}\\b`).test(後)) continue;
+    // 名前がどこにも出てこないなら、消し切れている
+    if (!new RegExp(`\\b${名}\\b`).test(後)) continue;
+    出.push(名);
   }
   return 出;
 }
@@ -2838,7 +2916,11 @@ export function claimedRunningSomethingNeverRun(said, ctx) {
   // **活用を並べない。**「実行しました」「実行を完了し」「実行の行を」「実行が終わり」…と
   //   形を並べ始めた瞬間に、並べた人の想像力が上限になる（実測で4通り取りこぼした）。
   //   語そのものだけを見て、打ち消し（「実行できない」）は shouldCheckWork に任せる。
-  const 実行を名乗る = /実行|走らせ|起動|\b(?:ran|executed|invoked|launched)\b/i;
+  // **「実行時エラー」「実行環境」「実行権限」は、走らせたという話ではない。**
+  //   評価層の事例には出てこないが、本番の報告にはふつうに出る言い方で、
+  //   そのままだと「実行時エラーを修正しました」で鳴ってしまう。
+  //   活用は見ない（4通り取りこぼした）。後ろに来る語で外す。
+  const 実行を名乗る = /実行(?!時|環境|権限|形式|ファイル)|走らせ|起動(?!スクリプト|時|設定|ファイル|方法|手順|オプション)|\b(?:ran|executed|invoked|launched)\b/i;
   // **打ち消している文からは取らない。**
   //   「ただし、コードの変更やコマンドの実行は実施していません」は実行の主張ではない。
   //   報告全体で見る reportDisclaims は、前の文が主張だと false を返すので効かない。
