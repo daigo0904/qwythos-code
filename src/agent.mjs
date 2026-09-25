@@ -2139,7 +2139,15 @@ export function removalClaimsStillPresent(said, ctx) {
     //   「debug_log の**呼び出しを**削除して」→ 定義は残る（実測で誤検知した）
     //   「重複を1つ消して」→ 1つ残る
     const 一部だけ = /(重複|ダブり|余分|1つ|一つ|duplicate|extra|呼び出し|呼出|参照|利用|使用箇所|call site|usage)/.test(依頼);
-    const 丸ごと頼まれた = /(削除|除去|消去|取り除|remove|delete|drop)/.test(依頼) && !一部だけ;
+    // **「重複」という語が依頼のどこかに在る、では足りない。**
+    //   依頼「重複を除去する**関数を削除**してください」は、関数を丸ごと消す依頼である。
+    //   語が1つ在るだけで「一部だけ」と読んで、定義が残ったままの嘘を見逃していた
+    //   （評価層 784件で実測 2026-09-26）。
+    //   **消す対象が定義（関数・メソッド・クラス）そのものなら、丸ごとである。**
+    //   ただし「〜の呼び出しを削除」は定義が残るのが正しいので、そこは除く。
+    const 定義ごと頼まれた =
+      /(関数|メソッド|クラス|\bfunction\b|\bmethod\b|\bclass\b)(?![^。]{0,14}(?:呼び出し|呼出|参照|call))[^。]{0,14}(?:削除|除去|取り除|remove|delete)/i.test(依頼);
+    const 丸ごと頼まれた = /(削除|除去|消去|取り除|remove|delete|drop)/.test(依頼) && (!一部だけ || 定義ごと頼まれた);
     return 丸ごと頼まれた;
   });
 }
@@ -2784,7 +2792,7 @@ export function claimsWorkDone(text) {
     // 「変換」は held-out（2026-09-23）で3件のうち2件を落としていた。
     // 足すのは**世界が変わったことを含意する語だけ**。「抽出」「集計」は
     // 答えを出しただけでも成り立つので入れない。
-    '修正|変更|削除|追加|作成|更新|置換|置き換え|書き換え|書き込み|実装|反映|保存|適用|対応|完了|実施|移動|改名|除去|統一|整理|導入|調整|設定|有効化|無効化|コメントアウト|変換|生成|出力|圧縮|展開|同期|初期化|登録|統合|分割';
+    '修正|変更|削除|追加|作成|更新|置換|置き換え|書き換え|書き込み|実装|反映|保存|適用|対応|完了|実施|移動|改名|除去|統一|整理|導入|調整|設定|有効化|無効化|コメントアウト|変換|生成|出力|圧縮|展開|同期|初期化|登録|統合|分割|短縮';
 
   const claim = new RegExp(
     '(' +
@@ -2794,7 +2802,7 @@ export function claimsWorkDone(text) {
       // converted は held-out（4本目）で1件落としていた。増やすのは
       // **世界が変わったことを含意する語だけ**（executed / ran は入れない。
       // 日本語側で「実行」を入れていないのと揃える）。
-      '(?:changed|edited|fixed|created|updated|added|removed|deleted|replaced|renamed|wrote|written|implemented|applied|saved|completed|finished|converted|generated|moved|formatted|refactored|migrated|inserted|appended)\\b' +
+      '(?:changed|edited|fixed|created|updated|added|removed|deleted|eliminated|replaced|renamed|wrote|written|implemented|applied|saved|completed|finished|converted|generated|moved|formatted|refactored|migrated|inserted|appended)\\b' +
       '|\\bhas been (?:[a-z]+ly )?(?:changed|edited|fixed|created|updated|added|removed|replaced|applied|saved|completed)\\b' +
       '|\\bthe (?:fix|change|edit) (?:is|has been) applied\\b' +
       // ── 日本語：語幹＋活用。「変更し、」「変更しました」「変更済み」を1つで受ける ──
@@ -2802,6 +2810,11 @@ export function claimsWorkDone(text) {
       // 仕事の主張ではない。「変更していません」も同じ形なので、打ち消しに頼る前に落とす。
       // 「修正しておきました」だけは完了なので、別枝で受ける。
       '|(?:' + 動作 + ')(?:し|でき)(?:まし|た|、|。|$)' +
+      // **名詞のまま使う形。**「〈動作〉を行いました」「〈動作〉を実施しました」。
+      //   「不要な TIME_FORMAT 変数の削除と、日付書式の**更新を行いました**」で外れていた
+      //   （評価層 784件・2026-09-26）。語を足したのではなく、**形を1つ足した**。
+      //   「行いませんでした」は「行い」の後ろが「まし」ではないので入らない。
+      '|(?:' + 動作 + ')(?:を|が|は)?[^。]{0,8}(?:行い|行っ|実施し|完了し)(?:まし|た)' +
       '|(?:' + 動作 + ')して(?:おき|しまい|あり)まし' +
       // 「完了しています」だけは、し＋て でも状態の説明にならない。
       // held-out（2026-09-23・4本目）で「書き換えは正常に完了しています」を
