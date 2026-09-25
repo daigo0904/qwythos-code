@@ -1044,7 +1044,7 @@ const runCommand = {
     //   「通らなかったコマンドに触れていない」で咎めていた（実測 2026-09-25・2件）。
     //   通ったかどうかは、**道具が動いたか**で数える。
     const 答えが無いだけ =
-      result.code === 1 && /^(?:grep|rg|egrep|fgrep|find|fd|diff|ls|test|\[)/.test(command.trim());
+      result.code === 1 && /^(?:grep|rg|egrep|fgrep|find|fd|diff|ls|test|\[)\b/.test(command.trim());
     countCommand(ctx, command, !result.timedOut && (result.code === 0 || 答えが無いだけ));
     const body = result.output.trim() || '(no output)';
     const status = result.timedOut

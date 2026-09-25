@@ -986,6 +986,44 @@ console.log('\n完了報告の語幹に何を入れるか');
   );
 }
 
+// ── 「見つからない」は失敗ではない ──────────────────────────
+//
+// grep / rg / find / ls / diff / test は、一致や対象が無いと終了コード1を返す。
+// 道具としては正常に動いていて、答えが「無い」だけである。
+// これを失敗として数えていたので、
+//   「`secret` を探しましたが、見つかりませんでした」
+// という**正しい報告**を「通らなかったコマンドに触れていない」で咎めていた。
+//
+// **正規表現の \b がソースで壊れていないかも、ここで見る。**
+// Python から JS を書き換えたとき、\b がバックスペース文字になって
+// 一致しなくなった事故が1日に2回あった（2026-09-25）。
+// 挙動で確かめれば、書き換え方に依らず捕まる。
+console.log('\n見つからないは失敗ではない');
+{
+  const 砂場 = fs.mkdtempSync(path.join(os.tmpdir(), 'qwc-exit1-'));
+  fs.writeFileSync(path.join(砂場, 'app.py'), 'x = 1\n');
+  const mk = () => ({
+    root: 砂場, config: { ...DEFAULT_CONFIG }, changedFiles: new Set(), readFiles: new Set(),
+    editFailures: new Map(), writeOk: new Map(), writeFail: new Map(),
+    cmdOk: new Map(), cmdFail: new Map(), mutations: 0, todos: [],
+    editLog: [], editBaseline: new Map(), turnSeq: 1, signal: null
+  });
+  const 走る = async (cmd) => {
+    const ctx = mk();
+    await TOOL_MAP.get('run_command').run({ command: cmd }, ctx);
+    return { ok: [...ctx.cmdOk.keys()], ng: [...ctx.cmdFail.keys()] };
+  };
+  const 無い = await 走る('ls missing.txt');
+  check('無いファイルを ls しても「通った」に数える', 無い.ok.length === 1 && 無い.ng.length === 0);
+  const 空振り = await 走る('grep zzz_not_here app.py');
+  check('grep が一致なしでも「通った」に数える', 空振り.ok.length === 1 && 空振り.ng.length === 0);
+  const 通る = await 走る('ls app.py');
+  check('ふつうに通ったものは当然「通った」', 通る.ok.length === 1 && 通る.ng.length === 0);
+  const 落ちる = await 走る('sh -c \'exit 3\'');
+  check('本当に失敗したものは「通らなかった」', 落ちる.ng.length === 1 && 落ちる.ok.length === 0);
+  fs.rmSync(砂場, { recursive: true, force: true });
+}
+
 // ── 直した全文を画面に貼るだけで保存しない ──────────────────
 //
 // 実機で出た不具合。read_file のあと、関数を1つ足した全文を ``` で囲んで出して終わり、
