@@ -244,17 +244,39 @@ export function normalizeStoredConfig(fromFile, { warn = (m) => process.stderr.w
   return out;
 }
 
+/**
+ * **0 に意味がある鍵。**
+ *
+ * 以前はこの一覧の全部で「0 は壊れている」扱いにしていた。理由は
+ * 「既定値が全部 0 より大きいから」だったが、**既定が正なことは 0 が無効な理由にならない。**
+ *   temperature: 0        … 毎回同じ答えを出す（計測の再現に要る）
+ *   topK: 0               … 無効化（llama.cpp の約束）
+ *   maxNudges: 0          … 促しを出さない
+ *   keepFullToolTurns: 0  … 道具の出力を1つも丸ごと残さない
+ *   oldToolOutputChars: 0 … 古い道具の出力を残さない
+ * どれも「切る」という指定で、0 でしか書けない。
+ * 0 を落として既定に戻すと、**切ったつもりが効いていない**という一番たちの悪い形になる。
+ * （別セッション daigo-de が maxNudges: 0 で見つけた・2026-09-26）
+ *
+ * 時間・大きさ・回数の上限（commandTimeoutMs / maxSteps / compactAtRatio など）は
+ * 0 で動かなくなるので、引き続き 0 も壊れている扱いにする。
+ */
+const ZERO_OK_KEYS = new Set([
+  'temperature', 'topK', 'maxNudges', 'keepFullToolTurns', 'oldToolOutputChars',
+]);
+
 function dropBrokenNumbers(source, warn) {
   const out = { ...source };
   for (const key of NUMERIC_KEYS) {
     if (!(key in out)) continue;
     const v = Number(out[key]);
-    // 0 と負の数もここでは壊れている扱い。この一覧の既定値は全部 0 より大きい。
-    if (Number.isFinite(v) && v > 0) continue;
-    warn(
-      `設定の ${key} が数として読めません（${JSON.stringify(out[key])}）。` +
-      `既定値 ${DEFAULT_CONFIG[key]} を使います: ${CONFIG_PATH}\n`
-    );
+    const 下限 = ZERO_OK_KEYS.has(key) ? 0 : 1;
+    if (Number.isFinite(v) && v >= 下限) continue;
+    // **理由を正しく言う。** 0 は数として読める。読めないのと、小さすぎるのは別の話。
+    const 理由 = Number.isFinite(v)
+      ? `設定の ${key} は ${下限 === 0 ? '0 以上' : '0 より大きい数'} にしてください（${JSON.stringify(out[key])}）。`
+      : `設定の ${key} が数として読めません（${JSON.stringify(out[key])}）。`;
+    warn(`${理由}既定値 ${DEFAULT_CONFIG[key]} を使います: ${CONFIG_PATH}\n`);
     delete out[key];
   }
   return out;

@@ -4201,6 +4201,39 @@ console.log('\n数で受け取る設定');
   check('保存された numCtx が null なら、既定に戻す', !('numCtx' in 壊れ));
   check('保存された maxSteps が数でなければ、既定に戻す', !('maxSteps' in 壊れ));
   check('まともな値はそのまま残す', 壊れ.temperature === 0.4);
+
+  // **0 に意味がある鍵は、0 を通す。**
+  //   以前は「既定値が全部 0 より大きいから」という理由で 0 を全部落としていた。
+  //   `maxNudges: 0`（促しを出さない）を書いた人が、黙って 5 に戻されていた
+  //   （別セッション daigo-de が見つけた・2026-09-26）。
+  //   **切ったつもりが効いていない**のは、この道具が一番嫌う形の失敗である。
+  //   `temperature: 0`（毎回同じ答え）も同じ穴に落ちていて、計測の再現に効く。
+  const 零 = normalizeStoredConfig(
+    { maxNudges: 0, temperature: 0, topK: 0, keepFullToolTurns: 0, oldToolOutputChars: 0 },
+    { warn: 黙る }
+  );
+  check('maxNudges: 0 は通す（促しを切る指定）', 零.maxNudges === 0);
+  check('temperature: 0 は通す（毎回同じ答え）', 零.temperature === 0);
+  check('topK: 0 は通す（無効化）', 零.topK === 0);
+  check('keepFullToolTurns: 0 / oldToolOutputChars: 0 も通す',
+    零.keepFullToolTurns === 0 && 零.oldToolOutputChars === 0);
+
+  // 時間・大きさの上限は 0 で動かなくなるので、引き続き落とす
+  const 零だめ = normalizeStoredConfig({ commandTimeoutMs: 0, maxSteps: 0, compactAtRatio: 0 }, { warn: 黙る });
+  check('commandTimeoutMs: 0 は落とす', !('commandTimeoutMs' in 零だめ));
+  check('maxSteps: 0 は落とす', !('maxSteps' in 零だめ));
+  check('compactAtRatio: 0 は落とす', !('compactAtRatio' in 零だめ));
+
+  // 負の数はどの鍵でも落とす
+  check('maxNudges: -1 は落とす', !('maxNudges' in normalizeStoredConfig({ maxNudges: -1 }, { warn: 黙る })));
+
+  // **理由の文が正しいこと。** 0 は「数として読めない」のではない。
+  {
+    const 声 = [];
+    normalizeStoredConfig({ commandTimeoutMs: 0 }, { warn: (m) => 声.push(m) });
+    check('0 を落とすときは「数として読めません」と言わない',
+      声.length === 1 && !声[0].includes('数として読めません') && 声[0].includes('0 より大きい'));
+  }
 }
 
 // ── 6. 「考える深さ」が保存されるようにする ────────────────────
