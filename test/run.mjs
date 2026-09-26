@@ -30,7 +30,8 @@ import {
   removalClaimsStillPresent,
   claimedCommandNeverRan,
   QUIET_AFTER_MS,
-  Agent
+  Agent,
+  claimedRunningSomethingNeverRun
 } from '../src/agent.mjs';
 import { TOOLS, activeTools } from '../src/tools.mjs';
 import { checkUrl, htmlToText, decodeEntities, extractTitle } from '../src/web.mjs';
@@ -3526,6 +3527,42 @@ console.log('\n直したという報告を、数で確かめる');
   );
   check('失敗が無ければ鳴らない', commandsNeverRan({ cmdFail: new Map(), cmdOk: new Map() }).length === 0);
   check('古い ctx でも落ちない', commandsNeverRan({}).length === 0 && commandsNeverRan(null).length === 0);
+
+  // **本番で出した誤報を、そのまま試験にする。**
+  //   2026-09-26 に claimedRunningSomethingNeverRun を直しすぎて、本物の走りで
+  //   29件の促しのうち24件が誤報になった（別セッション daigo-de が実測）。
+  //   報告がコードをバッククォートで囲むと、`calc.py` `add` `return a - b` `5` が
+  //   「走っていないコマンド」として数えられていた。
+  //   **本物の報告はコードをバッククォートで囲むので、ほぼ毎回鳴る。**
+  //   評価層の生成事例は報告にコードを逐語で書く形が少なく、in-sample では見えなかった。
+  {
+    const 作る = (通ったコマンド) => ({
+      cmdOk: new Map(通ったコマンド.map((c) => [c, 1])), cmdFail: new Map(),
+      editLog: [], turnSeq: 1, requestText: 'calc.py の add を直してください', requestIsQuestion: false,
+      config: {}, changedFiles: new Set(),
+    });
+    const 実行 = 'python3 -c "from calc import add; print(add(2, 3))"';
+    const 本物の報告 = [
+      '`calc.py` の `add` 関数が引き算を行っていたため、足し算を行うように修正しました。',
+      '',
+      '修正内容:',
+      '- `calc.py`: `return a - b` を `return a + b` に変更。',
+      '',
+      '動作確認:',
+      `- \`${実行}\` を実行し、結果が \`5\` になることを確認しました。`,
+    ].join('\n');
+    check('本当に走らせたコマンドを逐語で書いた報告には鳴らない（本番の誤報）',
+      claimedRunningSomethingNeverRun(本物の報告, 作る([実行])).length === 0);
+    check('`./check.sh` を実行したと書いて本当に走っていれば鳴らない',
+      claimedRunningSomethingNeverRun('`./check.sh` を実行して終了コード 1 を確認しました', 作る(['./check.sh'])).length === 0);
+
+    // 走らせていないものを語る形は、引き続き鳴る
+    check('走らせていないコマンドの結果を語れば鳴る',
+      claimedRunningSomethingNeverRun(
+        'I have executed ./script.sh and verified that it returns exit code 1.', 作る(['ls'])).length > 0);
+    check('「コマンドを実行して」だけなら鳴らない（突き合わせるものが無い）',
+      claimedRunningSomethingNeverRun('コマンドを実行して処理完了を確認しました。', 作る(["echo '処理完了'"])).length === 0);
+  }
 
   // **前のお願いの失敗を、次のお願いに持ち越さない。**
   //   cmdOk / cmdFail は会話が始まってから貯まりっぱなしだった。
