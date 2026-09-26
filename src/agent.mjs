@@ -684,6 +684,24 @@ export class Agent {
             }
           }
 
+          // 書き換えたあとのファイルが、字下げの親を失った行を持っている場合。
+          // 報告が何を言っていようと、構文エラーのファイルを残したなら壊れている。
+          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+            const 壊れた = leftBrokenIndentation(this.ctx);
+            if (壊れた.length) {
+              nudges++;
+              info(`字下げが壊れたまま残っているので、促しました（${壊れた[0]}）。`);
+              this.messages.push({
+                role: 'user',
+                content:
+                  `Your edit left ${壊れた[0]} with an indented block that has nothing to belong to. ` +
+                  'The file no longer parses. You probably deleted a `def`/`if`/`for` line but left its body. ' +
+                  'Read the file and remove the orphaned body too, or put the line back.'
+              });
+              continue;
+            }
+          }
+
           // 「消した」と言っているのに、**この回で1行も消えていない**場合。
           //
           // 上の2つは「消したと名乗った名前」を取り出してから照合するので、
@@ -2432,6 +2450,59 @@ export function removedDefinitionStillCalled(said, ctx) {
     // 名前がどこにも出てこないなら、消し切れている
     if (!new RegExp(`\\b${名}\\b`).test(後)) continue;
     出.push(名);
+  }
+  return 出;
+}
+
+/**
+ * **書き換えたあとのファイルが、字下げの親を失った行を持っていないか。**
+ *
+ * ■ なぜ要るか（評価層で実測 2026-09-26・別セッション daigo-b4 の指摘から）
+ *   依頼「app.py の関数 remove_duplicates を削除してください」
+ *   やったこと: `def remove_duplicates(items):` の**1行だけ**を消した。
+ *   残ったファイル:
+ *       #!/usr/bin/env python3
+ *
+ *           unique_items = []          ← 親を失った本体がそのまま
+ *           for item in items:
+ *   **報告は「削除しました」で、名前は確かに消えている。**
+ *   それでいてファイルは構文エラーで、もう動かない。
+ *   「消した名前が残っているか」を見る見張りは全部黙る（名前は消えているので）。
+ *
+ * ■ 報告を読まない
+ *   何と報告していようと、字下げが壊れたファイルを残したなら壊れている。
+ */
+export function leftBrokenIndentation(ctx) {
+  const 出 = [];
+  for (const p of changedThisTurn(ctx)) {
+    if (!/\.py$/.test(p)) continue;
+    let 中身;
+    try {
+      const st = fs.statSync(p);
+      if (!st.isFile() || st.size > 2 * 1024 * 1024) continue;
+      中身 = fs.readFileSync(p, 'utf8');
+    } catch { continue; }
+    const 行 = 中身.split('\n');
+    const 積み = [0];
+    let 前の行 = null;
+    let 三重 = false;
+    for (let i = 0; i < 行.length; i++) {
+      const l = 行[i];
+      if (/"""|'''/.test(l) && (l.match(/"""|'''/g) || []).length % 2 === 1) 三重 = !三重;
+      if (三重 || l.trim() === '') continue;
+      const 深 = l.search(/\S/);
+      const 続き = 前の行 !== null && /[,([{+\\]\s*$/.test(前の行);
+      if (!続き) {
+        if (深 > 積み[積み.length - 1]) {
+          if (前の行 !== null && /:\s*(#.*)?$/.test(前の行)) 積み.push(深);
+          else 出.push(`${p.split("/").pop()}:${i + 1}`);
+        } else {
+          while (積み.length > 1 && 深 < 積み[積み.length - 1]) 積み.pop();
+          if (深 !== 積み[積み.length - 1]) 出.push(`${p.split("/").pop()}:${i + 1}`);
+        }
+      }
+      前の行 = l;
+    }
   }
   return 出;
 }
