@@ -702,6 +702,23 @@ export class Agent {
             }
           }
 
+          // 依頼が名指しした「変更後の値」が、作業のあとの中身に無い場合。
+          // 「2秒から5秒に」と頼まれて 5→2 にした形（向きが逆）に効く。
+          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+            const 無い値 = requestedValueNotPresent(said, this.ctx);
+            if (無い値.length) {
+              nudges++;
+              info(`依頼された値 ${無い値.join(', ')} がファイルに入っていないので、促しました。`);
+              this.messages.push({
+                role: 'user',
+                content:
+                  `This request asked for \`${無い値[0]}\`, but that value does not appear anywhere in what you changed. ` +
+                  'Check which direction you edited. Read the file and fix it, or say plainly what value is there now.'
+              });
+              continue;
+            }
+          }
+
           // 「消した」と言っているのに、**この回で1行も消えていない**場合。
           //
           // 上の2つは「消したと名乗った名前」を取り出してから照合するので、
@@ -2383,8 +2400,12 @@ export function claimedMissingButPresent(said, ctx, evidence) {
   if (ctx?.requestIsQuestion) return [];
   const 文 = String(said ?? '').split(/(?<=[。！？])\s*|(?<=[.!?])\s+|\n+/).filter((x) => x.trim());
   // 「存在しない**場合**」「見つからない**とき**」は仮定の話で、報告ではない
-  const 仮定の話 = /(存在しな|見つから(?:ない|ず))[^。]{0,4}(場合|とき|時|なら|ならば|ときは)/;
-  const 無いと言う = /(見つから(?:ない|ず|なかった)|存在しな|ありませんでし|無かった|not found|does not exist|could not find)/i;
+  const 仮定の話 = /(存在し(?:ない|ま?せ)|見つから(?:ない|ず)|ありませ)[^。]{0,4}(場合|とき|時|なら|ならば|ときは)/;
+  // **「存在しな」は「存在しない」に当たるが「存在し**ませ**ん」には当たらない。**
+  //   報告「指定された関数 'normalize_path' は存在しません。」を取りこぼしていた
+  //   （別セッション daigo-de の独立神託が実物で見つけた・2026-09-26）。
+  //   活用の一覧ではなく、打ち消しの**語尾の形**（ない／ませ）で受ける。
+  const 無いと言う = /(見つから(?:ない|ず|なかった)|見つかりませ|存在し(?:ない|ま?せ)|存在せず|ありませ|無かった|not found|does not (?:exist|contain)|could not find|no such)/i;
   const 出 = [];
   for (const s of 文) {
     if (!無いと言う.test(s) || 仮定の話.test(s)) continue;
@@ -2503,6 +2524,71 @@ export function leftBrokenIndentation(ctx) {
       }
       前の行 = l;
     }
+  }
+  return 出;
+}
+
+/**
+ * **依頼が名指しした「変更後の値」が、作業のあとの中身に無い**場合。
+ *
+ * ■ なぜ要るか（別セッション daigo-de の独立神託が実物で見つけた・2026-09-26）
+ *   依頼「接続の待ち時間を**2秒から5秒に**変更してください」
+ *   やったこと: `time.sleep(5)` → `time.sleep(2)`  ——**向きが逆**
+ *   報告「接続の待ち時間を2秒から5秒に変更しました。」
+ *   ファイルは確かに変わっているので、「やったと言うが中身が変わっていない」は黙る。
+ *   主張〔書いた: app.py〕も**真**なので、主張を当てる神託にも見えない。
+ *   **値の向きを見る目が、見張りにも神託にも無かった。**
+ *
+ * ■ 依頼文だけを根拠にする
+ *   報告の言い回しではなく、**利用者が書いた依頼**から目標の値を取る。
+ *   報告は言い換えてくるが、依頼はこちらの都合で変わらない。
+ *
+ * ■ 数値と引用符つきの文字列だけを見る
+ *   「YYYY-MM-DD に変更して」の YYYY-MM-DD は、コードには `%Y-%m-%d` として入る。
+ *   書式の説明を literal として探すと誤検知になるので、
+ *   **数値**（単位つきも可）と**引用符で囲まれた文字列**に限る。
+ */
+export function requestedValueNotPresent(said, ctx) {
+  if (!shouldCheckWork(said, ctx)) return [];
+  if (!claimsWorkDone(said)) return [];
+  const 依頼 = String(ctx?.requestText ?? '');
+
+  // **「A から B に」の両方を取る。** 片方（目標）だけを見ると、
+  //   「日付の書式を YYYY/MM/DD から YYYY-MM-DD に変更して」で誤爆する
+  //   （コードには `%Y-%m-%d` として入るので、YYYY-MM-DD という綴りは在らない）。
+  //   実測で3件誤検知した。**向きが逆になっている形だけを見る。**
+  const 組 = [];
+  const 数 = '([0-9]+(?:\\.[0-9]+)?)';
+  const 引 = "['\"`]([^'\"`\\n]{1,40})['\"`]";
+  // **引用符の組は使わない。** 実測で検知0・誤検知2（どちらも日付の書式）。
+  //   依頼「日付の書式を 'YYYY/MM/DD' から 'YYYY-MM-DD' に変更して」で、
+  //   説明文（docstring）に YYYY/MM/DD が残っているだけで「向きが逆」と読んでしまう。
+  //   コードに入るのは `%Y-%m-%d` なので、綴りの照合が成り立たない。
+  //   数値だけに絞る（`引` は残してあるが、いまは使っていない）。
+  void 引;
+  for (const 式 of [
+    new RegExp(`${数}\\s*(?:秒|ミリ秒|分|時間|回|件|バイト|文字|%|KB|MB)?\\s*から\\s*${数}`, 'g'),
+  ]) {
+    for (const m of 依頼.matchAll(式)) if (m[1] && m[2] && m[1] !== m[2]) 組.push([m[1], m[2]]);
+  }
+  if (!組.length) return [];
+
+  const 変えた = [...changedThisTurn(ctx)];
+  if (!変えた.length) return [];         // 何も変わっていない回は別の見張りの担当
+  let 後 = '';
+  for (const p of 変えた) {
+    try {
+      const st = fs.statSync(p);
+      if (!st.isFile() || st.size > 2 * 1024 * 1024) continue;
+      後 += `\n${fs.readFileSync(p, 'utf8')}`;
+    } catch { /* 読めないものは咎めない */ }
+  }
+  if (!後) return [];
+
+  // **変更前の値が残っていて、変更後の値が無い**——そのときだけ鳴らす。
+  const 出 = [];
+  for (const [前の値, 後の値] of 組) {
+    if (後.includes(前の値) && !後.includes(後の値)) 出.push(`${前の値} → ${後の値}`);
   }
   return 出;
 }
