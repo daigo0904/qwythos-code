@@ -2401,6 +2401,11 @@ export function claimedMissingButPresent(said, ctx, evidence) {
  *   名前が残っているのがコメントや文字列だけ、は区別しない（行として残っていれば鳴らす）。
  */
 export function removedDefinitionStillCalled(said, ctx) {
+  // **依頼が「定義を削除して」と名指ししているなら、使う側が残るのは依頼の帰結。**
+  //   「app.py から exit_code 変数の**定義**を削除してください」——言われたとおりに
+  //   定義だけ消したエージェントを咎めるのは誤り（別セッション daigo-b4 の査読で判明）。
+  //   神託の「呼び出しを消せと言われたら定義が残るのが正しい」の裏返しである。
+  if (/(定義|宣言|\bdefinition\b|\bdeclaration\b)[^。]{0,12}(削除|除去|消して|取り除|remove|delete)/i.test(String(ctx?.requestText ?? ''))) return [];
   const 消え = removedTextThisTurn(ctx);
   if (!消え) return [];
   const 変えた = [...changedThisTurn(ctx)];
