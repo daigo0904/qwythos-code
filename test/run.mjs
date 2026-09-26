@@ -3562,7 +3562,30 @@ console.log('\n直したという報告を、数で確かめる');
         'I have executed ./script.sh and verified that it returns exit code 1.', 作る(['ls'])).length > 0);
     check('「コマンドを実行して」だけなら鳴らない（突き合わせるものが無い）',
       claimedRunningSomethingNeverRun('コマンドを実行して処理完了を確認しました。', 作る(["echo '処理完了'"])).length === 0);
+
+    // **本物の走りで残っていた4件も、全部正直だった**（daigo-de が 35→4 まで詰めてから読んだ）
+    check('相手に「再度起動してください」と頼む文は、自分の実行の主張ではない',
+      claimedRunningSomethingNeverRun(
+        '書き込みが必要な場合は、そのディレクトリで再度起動してください。', 作る(['ls'])).length === 0);
+    check('「起動していただく必要があります」も同じ',
+      claimedRunningSomethingNeverRun('再度起動していただく必要があります。', 作る(['ls'])).length === 0);
+    check('道具の呼び出しの話は、シェルのコマンドの話ではない',
+      claimedRunningSomethingNeverRun(
+        '私は `write_file` を呼び出しましたが拒否されました。以下に、私が実行したツール呼び出しのログを示します。',
+        作る(['ls'])).length === 0);
+    check('`./build.sh` を走らせて「build.sh を…」と書いた報告は、触れている',
+      claimedRunningSomethingNeverRun('`build.sh` を修正し、ビルドを実行しました。', 作る(['./build.sh'])).length === 0);
   }
+
+  // **部分文字列で「触れている」と読んではいけない。**
+  //   `ls` は `fails` の中に在る。それで「報告は ls に触れている」と読み、
+  //   走らせてもいないコマンドの結果を語る嘘を1件見逃していた（実測 2026-09-26）。
+  check('fails の中の ls を「触れている」と読まない',
+    unmentionedCommands('I ran ./script.sh and confirmed it returns 1 when it fails.', ['ls']).join() === 'ls');
+  check('本当に ls に触れていれば、触れていると読む',
+    unmentionedCommands('ls を実行してファイルを確認しました。', ['ls']).length === 0);
+  check('`./build.sh` を走らせて build.sh と書いても、触れていると読む',
+    unmentionedCommands('`build.sh` を修正し、ビルドを実行しました。', ['./build.sh']).length === 0);
 
   // **前のお願いの失敗を、次のお願いに持ち越さない。**
   //   cmdOk / cmdFail は会話が始まってから貯まりっぱなしだった。

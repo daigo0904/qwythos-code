@@ -3185,7 +3185,15 @@ export function claimedRunningSomethingNeverRun(said, ctx) {
   //   「ただし、コードの変更やコマンドの実行は実施していません」は実行の主張ではない。
   //   報告全体で見る reportDisclaims は、前の文が主張だと false を返すので効かない。
   const 文 = String(said ?? '').split(/(?<=[。！？])\s*|(?<=[.!?])\s+|\n+/).filter((x) => x.trim());
-  if (!文.some((x) => 実行を名乗る.test(x) && !reportDisclaims(x))) return [];
+  // **相手に頼んでいる文は、自分が実行したという主張ではない。**
+  //   「書き込みが必要な場合は、そのディレクトリで**再度起動**してください」
+  //   「再度**起動**していただく必要があります」
+  //   ——利用者への依頼である（別セッション daigo-de が本物の走りで実測・2026-09-26）。
+  const 相手に頼む = /(してください|して下さい|していただく|していただけ|する必要があります|お願いし|ください。?$)/;
+  // **道具の呼び出しは、シェルのコマンドではない。**
+  //   「私が実行したツール呼び出しのログ」——write_file などの話をしている。
+  const 道具の話 = /(ツール|道具|tool call)/i;
+  if (!文.some((x) => 実行を名乗る.test(x) && !reportDisclaims(x) && !相手に頼む.test(x) && !道具の話.test(x))) return [];
   const 集める = (m) => (m instanceof Map ? [...m.keys()] : []);
   const 走った = [...new Set([...集める(ctx?.cmdOk), ...集める(ctx?.cmdFail)])];
 
@@ -3211,7 +3219,10 @@ export function claimedRunningSomethingNeverRun(said, ctx) {
     //   これで「iconv コマンドの実行を行いました」を取りこぼした（実測）。
     ...[...t.matchAll(/\b([a-z][a-z0-9_-]{1,20})\s*(?:コマンド|\s+command\b)/gi)].map((m) => m[1]),
   ].filter(Boolean);
-  if (!名指し.length) return [];
+  // 道具の名前（read_file / write_file …）はシェルのコマンドではない
+  const 道具の名 = /^(?:read_file|edit_file|write_file|search_files|list_dir|run_command|todo_write|spawn_agent)$/;
+  const 名指し実体 = 名指し.filter((n) => !道具の名.test(String(n).trim()));
+  if (!名指し実体.length) return [];
 
   // **走ったコマンドのどれかに報告が触れているなら、鳴らしてはいけない。**
   //
@@ -3246,7 +3257,32 @@ export function unmentionedCommands(said, cmds) {
     const 目印 = [words[0], ...words.filter((w) => /[/.]/.test(w) && w.length >= 3)]
       .filter(Boolean)
       .map((w) => w.replace(/^["'`]|["'`]$/g, ''));
-    return !目印.some((w) => w && text.includes(w));
+    // **`./build.sh` を走らせて「build.sh を…」と書く報告は、触れている。**
+    //   `./` の有無だけで「触れていない」と読み、正直な報告に促していた
+    //   （別セッション daigo-de が本物の走りで実測・2026-09-26）。
+    for (const w of [...目印]) {
+      const 末尾 = w.replace(/^\.{0,2}\//, '').split('/').pop();
+      if (末尾 && 末尾.length >= 3 && !目印.includes(末尾)) 目印.push(末尾);
+    }
+    // **部分文字列で見てはいけない。**
+    //   `ls` は `fails` の中に在る。それで「報告は ls に触れている」と読み、
+    //   走らせてもいないコマンドの結果を語る嘘を1件見逃していた（実測 2026-09-26）。
+    //   語の切れ目を要求する。JS の \b は日本語で効かないので、前後の文字を直に見る。
+    const 語として在るか = (w) => {
+      if (!w) return false;
+      let i = text.indexOf(w);
+      while (i !== -1) {
+        const 前 = text[i - 1] ?? '';
+        const 後 = text[i + w.length] ?? '';
+        const 語の字 = /[A-Za-z0-9_]/;
+        const 前が字 = 語の字.test(前) && 語の字.test(w[0]);
+        const 後が字 = 語の字.test(後) && 語の字.test(w[w.length - 1]);
+        if (!前が字 && !後が字) return true;
+        i = text.indexOf(w, i + 1);
+      }
+      return false;
+    };
+    return !目印.some(語として在るか);
   });
   return 触れていない.length === list.length ? 触れていない : [];
 }
