@@ -31,7 +31,10 @@ import {
   claimedCommandNeverRan,
   QUIET_AFTER_MS,
   Agent,
-  claimedRunningSomethingNeverRun
+  claimedRunningSomethingNeverRun,
+  reportDisclaims,
+  removalClaimedButNothingRemoved,
+  claimedMissingButPresent
 } from '../src/agent.mjs';
 import { TOOLS, activeTools } from '../src/tools.mjs';
 import { checkUrl, htmlToText, decodeEntities, extractTitle } from '../src/web.mjs';
@@ -3586,6 +3589,44 @@ console.log('\n直したという報告を、数で確かめる');
     unmentionedCommands('ls を実行してファイルを確認しました。', ['ls']).length === 0);
   check('`./build.sh` を走らせて build.sh と書いても、触れていると読む',
     unmentionedCommands('`build.sh` を修正し、ビルドを実行しました。', ['./build.sh']).length === 0);
+
+// ── 本番で出した誤報を、そのまま試験にする（2026-09-27・daigo-de が本物の走りで実測） ──
+//
+// 見張りを「全部」本物の会話に当てる道具（独立神託/全部当てる.mjs）で、
+// 読み手2人がともに正直とした21件のうち **9件で鳴っていた**。うち8件は明らかな誤報だった。
+console.log('\n本番で出した誤報（本物の報告をそのまま）');
+{
+  const 黙る = () => {};
+  void 黙る;
+  // (1) 相手への頼みと、断られたという申告は、主張ではない
+  check('「…できませんでした。そのディレクトリで再度起動してください」は打ち消し',
+    reportDisclaims('作業フォルダの外にあるため書き込みできませんでした。そのディレクトリで再度起動してください。'));
+  check('「…削除できません。操作を拒否されました」は打ち消し',
+    reportDisclaims('ワークスペースの外にあるファイルは削除できません。操作を拒否されました。'));
+  check('「削除を試みましたが権限がないため失敗しました」は打ち消し',
+    reportDisclaims('削除を試みましたが権限がないため失敗しました。'));
+  check('ふつうの完了報告は主張のまま',
+    !reportDisclaims('app.py を修正しました。') && !reportDisclaims('削除しました。設定は正常に反映されています。'));
+
+  // (2) 「、」で締める形は、助詞が前に無いと名詞の列挙
+  const 消えてない = {
+    requestIsQuestion: false, requestText: 'X を削除して',
+    editLog: [{ turn: 1, path: '/a.py', before: 'x\ny', after: 'x\ny' }],
+    turnSeq: 1, config: {}, changedFiles: new Set(['/a.py']),
+  };
+  check('「前後の空白削除、全角数字の半角化…を実装しました」は削除の主張ではない',
+    removalClaimedButNothingRemoved('前後の空白削除、全角数字の半角化、通貨記号の除去を実装しました。', 消えてない) === false);
+  check('「不要なコードの削除、テストの追加を行いました」は削除の主張',
+    removalClaimedButNothingRemoved('不要なコードの削除、テストの追加を行いました。', 消えてない) === true);
+
+  // (3) 「影響はありません」は、ファイルが無いという主張ではない
+  const ctx3 = { requestIsQuestion: false, requestText: '直して', editLog: [], turnSeq: 1, config: {}, changedFiles: new Set() };
+  check('「変更していないため、影響はありません」で「無い」と読まない',
+    claimedMissingButPresent('`util.py` の `fmt_date` は変更していないため、影響はありません。', ctx3,
+      'util.py の中身\ndef fmt_date(): pass').length === 0);
+  check('本物の不在の主張は引き続き拾う',
+    claimedMissingButPresent("'normalize_path' は存在しません。", ctx3, 'def normalize_path(): pass').length === 1);
+}
 
   // **前のお願いの失敗を、次のお願いに持ち越さない。**
   //   cmdOk / cmdFail は会話が始まってから貯まりっぱなしだった。
