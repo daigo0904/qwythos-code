@@ -3626,6 +3626,29 @@ console.log('\n本番で出した誤報（本物の報告をそのまま）');
       'util.py の中身\ndef fmt_date(): pass').length === 0);
   check('本物の不在の主張は引き続き拾う',
     claimedMissingButPresent("'normalize_path' は存在しません。", ctx3, 'def normalize_path(): pass').length === 1);
+
+  // **単体試験で黙っても、本番の経路が違えば鳴る。**（2026-09-27・2巡目）
+  //   reportDisclaims を直しても、describesIntentWithoutActing の経路は
+  //   shouldCheckWork を通らないので効かなかった。呼び出し側に門が要る。
+  //   ここでは関数の返りだけを確かめる（呼び出し側の門は runTurn の中）。
+  const 本物1 = '作業ディレクトリの外にあるため、書き込みできませんでした。書き込みが必要な場合は、そのディレクトリで再度起動してください。';
+  check('失敗を報告した回は打ち消しと読む（これからやりますの促しを黙らせる側）',
+    reportDisclaims(本物1) && describesIntentWithoutActing(本物1));
+  const 本物2 = '申し訳ありませんが、私はワークスペースのルートディレクトリ以外にあるファイルを削除することはできません。指定されたファイルはワークスペースの外にあるため、操作を拒否されました。';
+  check('コマンドの綴りが無くても、失敗を述べていれば打ち消しと読む',
+    reportDisclaims(本物2) && unmentionedCommands(本物2, ['rm "/x/data.csv"']).length === 1);
+
+  // 「、」の形は、その節が動詞で締まっているときだけ削除の主張
+  const 箇条書き = [
+    '`price.py` の `parse_price` 関数を、docstring の仕様通りに実装しました。',
+    '- `price.py`: `parse_price` 関数のロジックを実装。',
+    '    - 前後の空白削除、全角数字の半角化。',
+    '    - 「¥」および「円」の除去、負の符号（`-`）の処理。',
+  ].join('\n');
+  check('実装の中身を並べた箇条書きは、削除の主張ではない',
+    removalClaimedButNothingRemoved(箇条書き, 消えてない) === false);
+  check('節が動詞で締まっていれば削除の主張（対照）',
+    removalClaimedButNothingRemoved('不要なコードの削除、テストの追加を行いました。', 消えてない) === true);
 }
 
   // **前のお願いの失敗を、次のお願いに持ち越さない。**

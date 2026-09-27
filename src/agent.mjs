@@ -380,7 +380,15 @@ export class Agent {
 
           // 「これからやります」と書くだけで手を動かさないモデルがある。
           // 待っていても永遠に動かないので、その場で促す。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5) && describesIntentWithoutActing(said)) {
+          // **失敗を正しく報告した回に鳴らしてはいけない。**
+          //   「作業ディレクトリの外にあるため、書き込みできませんでした。
+          //     書き込みが必要な場合は、そのディレクトリで再度起動してください。」
+          //   ——本番で2件、これに「これからやると言って手を動かしていない」と促していた
+          //   （別セッション daigo-de の実測・2026-09-27）。
+          //   この経路は shouldCheckWork を通らないので、reportDisclaims を直しても効かなかった。
+          //   **単体試験で黙っても、本番の経路が違えば鳴る。**
+          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)
+              && !reportDisclaims(said) && describesIntentWithoutActing(said)) {
             nudges++;
             info('手順を述べただけで実行していないので、促しました。');
             this.messages.push({
@@ -815,7 +823,14 @@ export class Agent {
           //   （2026-09-14、7語並べて1語漏らし、しかも安心する方向に間違えた）。
           //   代わりに、**通らなかったコマンドの名前が報告に出ているか**だけを見る。
           //   1つでも出ていれば、報告は失敗の話をしているので黙る。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          //
+          // ■ その賭けが外れる形（本番で実測・2026-09-27）
+          //   「私はワークスペースのルート以外にあるファイルを削除することはできません。
+          //     指定されたファイルはワークスペースの外にあるため、操作を拒否されました。」
+          //   ——**コマンドの綴りは無いが、失敗をはっきり述べている。**
+          //   名前が出ているかだけでは、この形が拾えない。打ち消しの門を足す。
+          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)
+              && !reportDisclaims(said)) {
             const 通らず = unmentionedCommands(said, commandsNeverRan(this.ctx));
             if (通らず.length) {
               nudges++;
@@ -3074,7 +3089,7 @@ const 削除を名乗る式 =
   //   ——これは実装した中身の説明で、削除したという主張ではない。
   //   本番で誤報になっていた（別セッション daigo-de の実測・2026-09-27）。
   //   「不要なコードの削除、…」（の が前に在る）は主張なので、そちらは残す。
-  /(?:(?:を|の|は|が|も|から)(?:削除|除去|消去|取り除)、)|(削除|除去|消去|取り除)(?:し|いたし|致し|され)?(?:まし|済み|(?:が|を|は)[^。]{0,8}(?:完了|終わ|行(?:い|っ))|により|によって)|(?:削除|除去|消去)[^。]{0,20}(?:完了し|終わり|行い|行っ|実施し)(?:まし|た)|(?:削り|消し)まし|\b(?:removed|deleted|dropped|stripped|eliminated)\b|\b(?:removal|deletion)\s+of\b/i;
+  /(?:(?:を|の|は|が|も|から)(?:削除|除去|消去|取り除)、[^。\n]{0,40}(?:まし|完了|行い|行っ|実施し))|(削除|除去|消去|取り除)(?:し|いたし|致し|され)?(?:まし|済み|(?:が|を|は)[^。]{0,8}(?:完了|終わ|行(?:い|っ))|により|によって)|(?:削除|除去|消去)[^。]{0,20}(?:完了し|終わり|行い|行っ|実施し)(?:まし|た)|(?:削り|消し)まし|\b(?:removed|deleted|dropped|stripped|eliminated)\b|\b(?:removal|deletion)\s+of\b/i;
 
 /** 打ち消していない文で削除を名乗っているか。 */
 function 削除を名乗っているか(said) {
