@@ -128,8 +128,35 @@ export class Agent {
    * 計画モードと調べもの係の扱いは、これまでどおり促しごとに決める（下の4つ目）。
    * ここでまとめて外すと、書き換えたと嘘をついたときに誰も正せなくなる。
    */
+  /**
+   * 「手を動かせ」と促してよい場面か。
+   *
+   * 雑談として受け取った発言では促さない。「ありがとう」に「まだ直していません」と
+   * 言い返すことになるし、質問に「手順だけ述べて実行なし」と咎めるのは誤りである
+   * （実測: smallTalk の門を外したら、型10の対照群5件で誤検知した）。
+   */
   shouldNudgeToAct() {
     return !(this.ctx.smallTalk || this.config.chatMode);
+  }
+
+  /**
+   * **報告が本当かどうかを確かめてよい場面か。**
+   *
+   * ■ 1つの旗で2つを決めていたのが誤りだった（2026-09-27）
+   *   以前は報告の見張りも `shouldNudgeToAct()` で切っていた。
+   *   その結果、英語の命令形で REQUEST_EN の動詞一覧に無いもの
+   *   （「**Trim** the logs by deleting the `log_end` function.」）が雑談に落ち、
+   *   **報告の見張りが丸ごと黙っていた**（held-out K1 の見逃し1件で実測）。
+   *
+   *   **雑談だったことは、偽の完了報告を通す理由にならない。**
+   *   「手を動かせ」は場面の話だが、「その報告は事実と違う」は場面によらない。
+   *
+   * ■ 質問は別の門で落ちる
+   *   facts.mjs の `requestIsQuestion` → `shouldCheckWork` で落ちるので、
+   *   ここで smallTalk を見る必要はない。
+   */
+  shouldCheckReport() {
+    return !this.config.chatMode;
   }
 
   /**
@@ -434,7 +461,7 @@ export class Agent {
           // どちらも run_command を挟んでいたため、一度も鳴らなかった。
           if (
             said &&
-            this.shouldNudgeToAct() &&
+            this.shouldCheckReport() &&
             nudges < (this.config.maxNudges ?? 5) &&
             shouldCheckWork(said, this.ctx)
           ) {
@@ -462,7 +489,7 @@ export class Agent {
           // `mutations` は run_command を数えるので 0 でなくなり、
           // `filesNeverWritten` は writeFail を見るので「一度も試していない」を拾わない。
           // 2026-09-08 に塞いだのは「試して失敗した」側だけだった。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const 変わらず = claimedButNothingChanged(said, this.ctx);
             if (変わらず) {
               nudges++;
@@ -497,7 +524,7 @@ export class Agent {
           // ■ ここは判断ではなく事実で見られる
           //   qwc は依頼を受けた時点で grep していて、無いことを知っている（facts.mjs）。
           //   知っている事実に報告が触れていないかどうかは、名前を探すだけで分かる。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const 無い = unmentionedMissing(said, this.ctx.missingKnown);
             if (無い.length) {
               nudges++;
@@ -520,7 +547,7 @@ export class Agent {
           // **通ったが中身が違う**嘘は抜ける。実機の記録（2026-09-08 21:28）では、
           // ファイルに存在しない関数を消したと報告し、実際にやったのは空行を2つ消しただけだった。
           // 書き換え自体は成功しているので、回数を数えるだけでは捕まらない。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const removed = removedTextThisTurn(this.ctx);
             const evidence = removed === null ? null : removed + turnEvidence(this.messages, this.stats.turns);
             const notRemoved = removalClaimsNotRemoved(said, evidence);
@@ -545,7 +572,7 @@ export class Agent {
           // その判断は正しい。ただし**「前に在った」証拠は「今も在る」ことの言い訳にならない。**
           // 実測 2026-09-23: 「`sys.exit(1)` を削除しました」と報告して別の行を消しただけ、
           // という回を、出力に名前があるという理由で見逃していた。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const 残っている = removalClaimsStillPresent(said, this.ctx);
             if (残っている.length) {
               nudges++;
@@ -567,7 +594,7 @@ export class Agent {
           // held-out 42件（2026-09-23）で、**名前を出しながら成功を語る**回が3件出て、
           // その賭けが外れた（「iconv コマンドを実行し、変換しました」）。
           // 賭け直さずに、通っていない・完了を語っている・何も変わっていない、の3つを重ねる。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const 語るだけ = claimedCommandNeverRan(said, this.ctx);
             if (語るだけ.length) {
               nudges++;
@@ -587,7 +614,7 @@ export class Agent {
           // 完了を語っているのに、この回に通らなかったコマンドがある場合。
           // 上の見張りは「ファイルも変わっていない」を条件にしている。
           // 失敗したコマンドの代わりに中身を作文して書く形は、それでは黙る。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const 通らず = claimedDoneWhileCommandFailed(said, this.ctx);
             if (通らず.length) {
               nudges++;
@@ -604,7 +631,7 @@ export class Agent {
           }
 
           // 実行したと言っているのに、実際に走ったコマンドが報告に1つも出てこない場合。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const 走った = claimedRunningSomethingNeverRun(said, this.ctx);
             if (走った.length) {
               nudges++;
@@ -622,7 +649,7 @@ export class Agent {
 
           // 報告のどこにも出てこない定義が、この回で消えている場合。
           // 「言っていることは全部本当で、言っていないことが壊れている」形。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const 黙って消した = removedDefinitionNotMentioned(said, this.ctx);
             if (黙って消した.length) {
               nudges++;
@@ -640,7 +667,7 @@ export class Agent {
 
           // 依頼が「関数を削除して」なのに、def/class の行が1つも消えていない場合。
           // 依頼にも報告にも識別子が無い言い方（「経路正規化関数を削除しました」）に効く。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             if (definitionRemovalWithNoDefinitionGone(said, this.ctx)) {
               nudges++;
               info('関数を消したと報告しましたが、定義の行が1つも消えていないので、促しました。');
@@ -656,7 +683,7 @@ export class Agent {
           }
 
           // 「見つからなかった」と言っている文字列が、この回の道具の出力に在る場合。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const 消えた分 = removedTextThisTurn(this.ctx);
             const 見た中身 = (消えた分 ?? '') + turnEvidence(this.messages, this.stats.turns);
             const 在った = claimedMissingButPresent(said, this.ctx, 見た中身);
@@ -676,7 +703,7 @@ export class Agent {
 
           // 定義を消したのに、それを呼んでいる側が残っている場合。
           // 「消した」のは本当なのに、コードは動かなくなっている。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const 宙に浮いた = removedDefinitionStillCalled(said, this.ctx);
             if (宙に浮いた.length) {
               nudges++;
@@ -694,7 +721,7 @@ export class Agent {
 
           // 書き換えたあとのファイルが、字下げの親を失った行を持っている場合。
           // 報告が何を言っていようと、構文エラーのファイルを残したなら壊れている。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const 壊れた = leftBrokenIndentation(this.ctx);
             if (壊れた.length) {
               nudges++;
@@ -712,7 +739,7 @@ export class Agent {
 
           // 依頼が名指しした「変更後の値」が、作業のあとの中身に無い場合。
           // 「2秒から5秒に」と頼まれて 5→2 にした形（向きが逆）に効く。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const 無い値 = requestedValueNotPresent(said, this.ctx);
             if (無い値.length) {
               nudges++;
@@ -729,7 +756,7 @@ export class Agent {
 
           // この回で新しく現れた「import していないモジュール参照」。
           // 動かせば NameError で落ちる。報告は読まない。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const 未入れ = usesUnimportedModule(this.ctx);
             if (未入れ.length) {
               nudges++;
@@ -746,7 +773,7 @@ export class Agent {
 
           // 「すべて」と言って、同じ種類の行が残っている場合。
           // 削除は本当に起きているので、消えた行を数える見張りは通ってしまう。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             const 残り = claimedAllButSomeRemain(said, this.ctx);
             if (残り.length) {
               nudges++;
@@ -768,7 +795,7 @@ export class Agent {
           // 名前が取れない報告（「不要なデバッグ用コードも削除しました」）は素通りする。
           // **名前が何であれ、削除には消えた行が伴う。** そこだけ見る。
           // これで「2つ主張して1つだけ本当にやる」形が閉じる（実測 2026-09-24）。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             if (removalClaimedButNothingRemoved(said, this.ctx)) {
               nudges++;
               info('消したと報告しましたが、この回は1行も消えていないので、促しました。');
@@ -785,7 +812,7 @@ export class Agent {
 
           // 「消した」と言っているのに、**消えた行がコメントと空行だけ**の場合。
           // 行は消えているので上の見張りは黙る。コードは1行も減っていない。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             if (removalRemovedOnlyComments(said, this.ctx)) {
               nudges++;
               info('消したと報告しましたが、消えたのはコメントと空行だけなので、促しました。');
@@ -805,7 +832,7 @@ export class Agent {
           // 行は確かに消えているので、消えた行を数える見張りは全部黙る。
           // 実測（2026-09-24）: 「greet関数を削除して…」と報告して、
           // `# def greet():` を増やしただけだった。消したのではなく隠しただけ。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)) {
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
             // **裸の「削除」で門を開けてはいけない。**
             //   「前後の空白**削除**、全角数字の半角化…を実装しました」は実装の説明で、
             //   削除したという主張ではない。本番で誤報になっていた
@@ -847,7 +874,7 @@ export class Agent {
           //     指定されたファイルはワークスペースの外にあるため、操作を拒否されました。」
           //   ——**コマンドの綴りは無いが、失敗をはっきり述べている。**
           //   名前が出ているかだけでは、この形が拾えない。打ち消しの門を足す。
-          if (said && this.shouldNudgeToAct() && nudges < (this.config.maxNudges ?? 5)
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)
               && !reportDisclaims(said)) {
             const 通らず = unmentionedCommands(said, commandsNeverRan(this.ctx));
             if (通らず.length) {
@@ -2158,6 +2185,12 @@ export function removalClaimNames(text) {
   };
   // 名前らしい形か。ふつうの英単語と見分けが付くものだけを通す
   const 名前らしい = (w) => /[_0-9A-Z]/.test(w.replace(/^[a-z]+$/, ''));
+  // **「password キーを削除しました」の password は、小文字だけでも名前である。**
+  //   ふつうの英単語を識別子と読まないために小文字だけの語を落としているが、
+  //   直後に「キー」「変数」「関数」「フィールド」「設定」が続くなら名指しである
+  //   （held-out K1 の見逃し1件・2026-09-27）。
+  const 名詞が続く = (w, 文) =>
+    new RegExp(`${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*(?:キー|変数|関数|メソッド|クラス|定数|フィールド|設定|の設定)`).test(文);
 
   const 前から取る = (前) => {
     const bq = [...前.matchAll(/`([^`\n]{1,60})`/g)].map((x) => x[1]);
@@ -2174,7 +2207,7 @@ export function removalClaimNames(text) {
     const id = [...前.matchAll(/[A-Za-z_][A-Za-z0-9_]{2,}(?:\.[A-Za-z0-9_]+)*/g)]
       .filter((x) => 前[x.index - 1] !== '-' && 前[x.index + x[0].length] !== '-')
       .map((x) => x[0])
-      .filter(名前らしい);
+      .filter((w) => 名前らしい(w) || 名詞が続く(w, 前));
     if (id.length) 足す(id[id.length - 1]);
   };
 
@@ -2205,7 +2238,16 @@ export function removalClaimNames(text) {
     if (ja) 前から取る(ja[1]);
 
     // ── 英語：目的語は動詞の**後ろ**にある ──
-    const en = /\b(?:I (?:have |just |already |now )*(?:[a-z]+ly )?(?:removed|deleted|dropped|stripped)|took out)\b([^`'"\n]{0,80})[`'"]([^`'"\n]{1,60})[`'"]/i.exec(s);
+    const en = /\b(?:I (?:have |just |already |now )*(?:[a-z]+ly )?(?:removed|deleted|dropped|stripped|eliminated)|took out)\b([^`'"\n]{0,80})[`'"]([^`'"\n]{1,60})[`'"]/i.exec(s);
+    // **引用符が無い英語も拾う。**「deleted the check_status function」
+    //   「Removed the `X` function.」（文頭の Removed）も同じ枝で受ける。
+    //   held-out K1 の見逃し1件がこの形だった（2026-09-27）。
+    //   識別子らしい形（_ か数字か大文字を含む）だけを通すので、
+    //   「deleted the file」のような普通の語は入らない。
+    if (!en) {
+      const en2 = /\b(?:removed|deleted|dropped|stripped|eliminated)\b\s+(?:the\s+)?[`'"]?([A-Za-z_][A-Za-z0-9_]{2,})[`'"]?\s*(?:function|method|class|variable|constant|setting)?/i.exec(s);
+      if (en2 && 名前らしい(en2[1])) { 足す(en2[1]); continue; }
+    }
     if (en) 足す(en[2]);
 
     // 受け身の言い方は、名前が動詞より前に来る。「`X` has been removed」
@@ -3072,7 +3114,16 @@ export function claimedButNothingChanged(said, ctx) {
       //   （held-out J1 の見逃し9件のうち3件がこれ・2026-09-27）。
       //   「調査を完了しました」で鳴らないのは、調査が 動作 の一覧に無いから。
       '|(?:を|が|は)?[^。]{0,20}(?:行い|行っ|実施し|完了し)(?:まし|た)' +
-    ')'
+    ')' +
+    // **英語の報告をまったく見ていなかった。**
+    //   「I have successfully deleted the `log_end` function from the file.」
+    //   で何も変わっていない回を、この枝が丸ごと見逃していた
+    //   （held-out K1 の見逃し6件のうち2件・2026-09-27）。
+    //   ここも「世界が変わったことを含意する語」だけに絞る。
+    //   completed / finished は入れない（調査を終えただけでも成り立つ）。
+    '|\\b(?:changed|edited|fixed|created|updated|added|removed|deleted|replaced|renamed' +
+    '|wrote|written|implemented|applied|saved|converted|generated|moved|inserted|appended' +
+    '|trimmed|truncated|stripped|eliminated)\\b'
   );
   if (!書きうる.length && 中身を変える語.test(text)) {
     return { kind: 'nothing', detail: null };
