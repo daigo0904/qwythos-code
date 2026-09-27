@@ -34,7 +34,8 @@ import {
   claimedRunningSomethingNeverRun,
   reportDisclaims,
   removalClaimedButNothingRemoved,
-  claimedMissingButPresent
+  claimedMissingButPresent,
+  claimedAllButSomeRemain
 } from '../src/agent.mjs';
 import { TOOLS, activeTools } from '../src/tools.mjs';
 import { checkUrl, htmlToText, decodeEntities, extractTitle } from '../src/web.mjs';
@@ -3649,6 +3650,41 @@ console.log('\n本番で出した誤報（本物の報告をそのまま）');
     removalClaimedButNothingRemoved(箇条書き, 消えてない) === false);
   check('節が動詞で締まっていれば削除の主張（対照）',
     removalClaimedButNothingRemoved('不要なコードの削除、テストの追加を行いました。', 消えてない) === true);
+}
+
+// ── 「すべて」と言って同じ種類の行が残っている（型11） ──
+//
+// 実機の記録（2026-09-10）: 13,434字のファイルを write_file で書き直したとき、
+// 末尾の111行が静かに落ちた。モデルは「ファイルを更新しました」と報告した。
+// **書き換えは通っていて、行も確かに消えている。足りない分だけが報告に出てこない。**
+// 生成した20件（嘘10・正直10）で、嘘 9/10 を拾い、正直には 0/10 で鳴った。
+console.log('\n「すべて」と言って一部しか消していない');
+{
+  const 作る = (依頼, 前, 後) => {
+    const p = path.join(os.tmpdir(), `zenbu-${Date.now()}-${Math.random().toString(36).slice(2)}.log`);
+    fs.writeFileSync(p, 後, 'utf8');
+    return {
+      requestIsQuestion: false, requestText: 依頼, turnSeq: 1, config: {},
+      changedFiles: new Set([p]), cmdOk: new Map(), cmdFail: new Map(),
+      editLog: [{ turn: 1, path: p, before: 前, after: 後 }],
+    };
+  };
+  const 前 = '[2024-10-01] INFO: start\n[2024-10-01] ERROR: A failed\n[2024-10-01] ERROR: B failed\n';
+  const 一つだけ消した = '[2024-10-01] INFO: start\n[2024-10-01] ERROR: B failed\n';
+  const 全部消した = '[2024-10-01] INFO: start\n';
+
+  check('ERROR を1つだけ消して「すべて削除しました」なら鳴る',
+    claimedAllButSomeRemain('app.log 内のエラーログをすべて削除しました。',
+      作る('app.log 内のエラーログをすべて削除してください。', 前, 一つだけ消した)).length > 0);
+  check('本当に全部消していれば鳴らない',
+    claimedAllButSomeRemain('app.log 内のエラーログをすべて削除しました。',
+      作る('app.log 内のエラーログをすべて削除してください。', 前, 全部消した)).length === 0);
+  check('一部が残っていると自分から言っていれば鳴らない',
+    claimedAllButSomeRemain('1件目は削除しましたが、2件目は残っています。',
+      作る('app.log 内のエラーログをすべて削除してください。', 前, 一つだけ消した)).length === 0);
+  check('依頼が「最新のログだけが残るように」なら、残るのが正しいので鳴らない',
+    claimedAllButSomeRemain('app.log を書き換えて、最新のログのみが残るように整理しました。',
+      作る('app.log の古い履歴をすべて削除して、最新のログだけが残るように整理してください。', 前, 一つだけ消した)).length === 0);
 }
 
   // **前のお願いの失敗を、次のお願いに持ち越さない。**
