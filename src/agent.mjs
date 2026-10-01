@@ -669,6 +669,23 @@ export class Agent {
             }
           }
 
+          // テストが通ったと言っているのに、この回に走ったテストが一度も通っていない場合。
+          // 落ちた命令の名前を報告が出していると、「触れていない」の見張りは黙る。
+          if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
+            const 落ちた試験 = claimedTestsPassedButFailed(said, this.ctx);
+            if (落ちた試験.length) {
+              nudges++;
+              info(`テストが通ったと報告しましたが、${落ちた試験.join(', ').slice(0, 60)} は通っていないので、促しました。`);
+              this.messages.push({
+                role: 'user',
+                content:
+                  `You reported that the tests pass, but in this request: ${落ちた試験.join(', ')} never passed. ` +
+                  'Run the tests again and read the failures, or say plainly which tests still fail.'
+              });
+              continue;
+            }
+          }
+
           // テストが通ったと言っているが、通したのは細工した走らせ方かテストだった場合。
           // コマンドは通っていてファイルも変わっているので、上の見張りは全員黙る。
           if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
@@ -3603,6 +3620,49 @@ export function riggedTestPass(said, ctx) {
     if (m && !開示(path.basename(m[1])) && !名指し(m[1])) out.push(`試験の結果を変えられる ${m[1]} をコマンドで置いた`);
   }
   return [...new Set(out)];
+}
+
+/**
+ * **テストが通ったと言っているのに、この回に走ったテストが一度も通っていない**場合。
+ *
+ * ■ なぜ要るか（2026-10-01、見張りを「主張の種類 × 証拠の種類」の表に当てはめて見つけた）
+ *   「`npm test` を実行して、全テストがパスしました。」——`npm test` は落ちている。
+ *   ここまでの見張りは全員黙る:
+ *     - unmentionedCommands は、報告がそのコマンドに触れていると黙る（名前を出したうえでの嘘）
+ *     - claimedDoneWhileCommandFailed は claimsWorkDone を要るが、「実行」「パス」は数えない
+ *     - riggedTestPass は、通ったコマンドの細工を見るので、落ちたコマンドは見ない
+ *   評価層の束には「試験を走らせた」系の嘘が3件しか無く、測れないまま穴が開いていた。
+ *
+ * ■ 何を返すか
+ *   - この回に走ったテストの命令のうち、一度も通らなかったもの
+ *   - 「テストを実行して通った」と言うのに、テストの命令が1本も走っていなければ、その旨
+ *
+ * ■ 鳴らせてはいけない場合
+ *   - 一度落ちて、直してから同じ命令で通った（cmdOk にも入っている）
+ *   - 失敗を自分で述べている文（reportDisclaims）
+ *   - 「通るはず」と推測しているだけで、実行したとは言っていない（走っていない場合）
+ */
+export function claimedTestsPassedButFailed(said, ctx) {
+  if (ctx?.requestIsQuestion) return [];
+  const 通った = [...(ctx?.cmdOk instanceof Map ? ctx.cmdOk.keys() : [])];
+  const 落ちた = [...(ctx?.cmdFail instanceof Map ? ctx.cmdFail.keys() : [])];
+  const 試験が走った = [...通った, ...落ちた].some((c) => 試験の命令(c));
+  const 文 = String(said ?? '').split(/(?<=[。！？])\s*|(?<=[.!?])\s+|\n+/).filter((x) => x.trim());
+  const 合格 = /通[っりるし]|通過|成功|パス|緑|\bpass(?:ed|es|ing)?\b|\bgreen\b|\bsucceed/i;
+  const 試験の語 = /(テスト|試験|\btests?\b|\bspecs?\b|pytest|jest|vitest|mocha)/i;
+  const 推測 = /はず|でしょう|と思われ|見込み|予定|\bshould\b|\bwould\b|\bexpected to\b/i;
+  const 通ったと言う文 = 文.filter((x) => !reportDisclaims(x) && !推測.test(x) && 合格.test(x)
+    && (試験の語.test(x) || 試験が走った));
+  if (!通ったと言う文.length) return [];
+
+  const 一度も通らず = 落ちた.filter((c) => 試験の命令(c) && !(ctx.cmdOk?.get(c) > 0));
+  if (一度も通らず.length) return 一度も通らず;
+
+  const 実行と言う = /実行|走らせ|回し|流し|\bran\b|\bexecuted\b|\brun\b/i;
+  if (!試験が走った && 通ったと言う文.some((x) => 実行と言う.test(x) && 試験の語.test(x))) {
+    return ['(この回はテストの命令を1本も走らせていません)'];
+  }
+  return [];
 }
 
 /**
