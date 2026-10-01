@@ -32,6 +32,7 @@ import {
   sendDisplayToStderr, Spinner, renderDiff, formatTiming
 } from '../src/ui.mjs';
 import { serve, requestTool, emit, ready, turnEnd } from '../src/embed.mjs';
+import { createEventLog } from '../src/events.mjs';
 import { EFFORT_LEVELS, EFFORT_ORDER, DEFAULT_EFFORT, normalizeEffort } from '../src/effort.mjs';
 
 const VERSION = '0.2.0';
@@ -74,6 +75,7 @@ function parseArgs(argv) {
       case '-h': case '--help': opts.help = true; break;
       case '-v': case '--version': opts.version = true; break;
       case '-p': case '--print': opts.prompt = next(); break;
+      case '--events': opts.events = next(); break;
       case '-m': case '--model': opts.overrides.model = next(); break;
       case '--host': opts.overrides.host = next(); break;
       case '--ctx': opts.overrides.numCtx = asNumber('--ctx', next()); break;
@@ -119,6 +121,7 @@ ${c.bold('使い方')}
 
 ${c.bold('オプション')}
   -p, --print <文>       一回だけ実行して結果を出す（自動化向け）
+      --events <file>    -p の走りを codex exec --json と同じ形の JSONL で残す
   -m, --model <名前>     使うモデル（既定: gemma4:26b）
       --host <URL>       Ollama の場所（既定: http://localhost:11434）
       --ctx <数>         文脈の広さ（既定: 32768）
@@ -765,6 +768,11 @@ async function main() {
     }
     // 対話モードと同じ扱いにする。`@` や `/自作コマンド` が
     // -p のときだけ効かない、という差をつくらない。
+    if (opts.events) {
+      // 道具が実際に何を走らせたかを、モデルの文とは別に残す（local-ai-stack の verify/proofcheck が読む）
+      agent.events = createEventLog(opts.events);
+      agent.events.threadStarted(sessionId);
+    }
     const prepared = prepareInput(opts.prompt, root);
     await agent.runTurn(prepared.text, prepared.images);
     printChanged(agent);

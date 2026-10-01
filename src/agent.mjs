@@ -62,6 +62,8 @@ export class Agent {
     this.root = root;
     this.permissions = permissions;
     this.onSave = onSave || (() => {});
+    // 走った記録の書き出し先（events.mjs）。--events を付けたときだけ入る
+    this.events = null;
     this.systemPrompt = buildSystemPrompt({ root, config });
     this.messages = [{ role: 'system', content: this.systemPrompt }];
     this.abortController = null;
@@ -318,6 +320,8 @@ export class Agent {
     this.abortController = new AbortController();
     this.ctx.signal = this.abortController.signal;
 
+    const tokensAtStart = { inputTokens: this.stats.inputTokens, outputTokens: this.stats.outputTokens };
+    if (this.events) this.events.turnStarted();
     const recentCalls = new Map();
     let interrupted = false;
     let nudges = 0;
@@ -1123,6 +1127,15 @@ export class Agent {
         content: '[The user interrupted you. Stop what you were doing and wait for the next instruction.]'
       });
     }
+    if (this.events) {
+      const last = [...this.messages].reverse().find((m) => m.role === 'assistant' && String(m.content || '').trim());
+      if (last) this.events.agentMessage(last.content);
+      if (interrupted) this.events.turnFailed('interrupted');
+      else this.events.turnCompleted({
+        inputTokens: this.stats.inputTokens - tokensAtStart.inputTokens,
+        outputTokens: this.stats.outputTokens - tokensAtStart.outputTokens
+      });
+    }
     return { interrupted };
   }
 
@@ -1573,6 +1586,12 @@ export class Agent {
       previewShown = decision.reason === 'user' || decision.reason === 'always';
       if (!decision.granted) {
         toolResultLine('ユーザーが実行を断りました', true);
+        if (this.events && tool.name === 'run_command') {
+          this.events.item({
+            type: 'command_execution', command: String(call.args?.command ?? ''),
+            aggregated_output: '', exit_code: null, status: 'declined'
+          });
+        }
         return {
           output:
             'The user denied this action. Do not try it again. ' +
@@ -1586,6 +1605,8 @@ export class Agent {
 
     try {
       const res = await tool.run(call.args || {}, this.ctx);
+      // 道具が実際に動いた分だけを残す。モデルの文ではなく、qwc が見た事実
+      if (this.events && res.event) this.events.item(res.event);
       // 道具が自分で画面に出したときは、結果の行を重ねない（やることリストなど）
       if (!res.quiet) toolResultLine(res.display || 'done', Boolean(res.isError));
 
