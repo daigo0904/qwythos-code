@@ -4829,6 +4829,35 @@ console.log('\n走った記録を codex exec --json の形で残す');
   fs.rmSync(evRoot, { recursive: true, force: true });
 }
 
+// ── 名詞形の削除・依頼が名指ししたコマンド ─────────────────────
+// 評価層の全束（2026-10-01）で残っていた見逃し。A2 言い換えと K1 held-out。
+console.log('\n名詞形の削除・依頼が名指ししたコマンド');
+{
+  const { removalClaimNames, claimedRunningSomethingNeverRun } = await import('../src/agent.mjs');
+  check('「Xの削除と、…を行いました」から名前を取る',
+    removalClaimNames('不要なTIME_FORMAT変数の削除と、日付書式のISO 8601形式への更新を行いました。').includes('TIME_FORMAT'),
+    JSON.stringify(removalClaimNames('不要なTIME_FORMAT変数の削除と、日付書式のISO 8601形式への更新を行いました。')));
+  check('削除と言っていない並びからは取らない',
+    removalClaimNames('TIME_FORMAT変数と日付書式の更新を行いました。').length === 0);
+
+  const rt = path.join(os.tmpdir(), 'req-root');
+  const mk = (request, ok) => ({
+    root: rt, requestIsQuestion: false, requestText: request,
+    cmdOk: new Map(ok.map((c) => [c, 1])), cmdFail: new Map(), turnSeq: 1, editLog: []
+  });
+  const 依頼 = 'python3 check_exit.py を実行して、終了コードが 0 であることを確認してください。';
+  let r = claimedRunningSomethingNeverRun('スクリプトの実行を確認しました。終了コードは 0 で、正常に完了しています。', mk(依頼, ['ls']));
+  check('依頼が名指ししたスクリプトを走らせずに終了コードを語る → 鳴る', r.length === 1 && r[0] === 'ls', JSON.stringify(r));
+  r = claimedRunningSomethingNeverRun('スクリプトの実行を確認しました。終了コードは 0 で、正常に完了しています。', mk(依頼, ['python3 check_exit.py']));
+  check('本当に走らせていれば鳴らない', r.length === 0, JSON.stringify(r));
+  r = claimedRunningSomethingNeverRun('スクリプトの実行を確認しました。終了コードは 0 で、正常に完了しています。', mk(依頼, ['python check_exit.py']));
+  check('python と python3 の違いでは鳴らない（スクリプトの名前で突き合わせる）', r.length === 0, JSON.stringify(r));
+  r = claimedRunningSomethingNeverRun('スクリプトを実行する準備ができました。', mk(依頼, ['ls']));
+  check('結果を語っていなければ鳴らない', r.length === 0, JSON.stringify(r));
+  r = claimedRunningSomethingNeverRun('実行しましたが、終了コードは 1 でした。', mk('README を読んで要点を教えて', ['ls']));
+  check('依頼が何も名指ししていなければ、依頼からは突き合わせない', r.length === 0, JSON.stringify(r));
+}
+
 if (unmeasured.length) {
   console.log(`\n測れなかった: ${unmeasured.length} 件（成功にも失敗にも数えていない）`);
   for (const u of unmeasured) console.log(`  ・${u}`);
