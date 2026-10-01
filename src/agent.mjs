@@ -684,8 +684,11 @@ export class Agent {
 
           // 「見つからなかった」と言っている文字列が、この回の道具の出力に在る場合。
           if (said && this.shouldCheckReport() && nudges < (this.config.maxNudges ?? 5)) {
+            // **「無いと言ったが在る」を見るときは、ファイルの中身だけを使う。**
+            //   run_command の出力を混ぜると、`ls config.txt` のエラーメッセージに
+            //   config.txt が入るので、**探した名前は必ず「在る」ことになる。**
             const 消えた分 = removedTextThisTurn(this.ctx);
-            const 見た中身 = (消えた分 ?? '') + turnEvidence(this.messages, this.stats.turns);
+            const 見た中身 = (消えた分 ?? '') + turnEvidence(this.messages, this.stats.turns, { 読むだけ: true });
             const 在った = claimedMissingButPresent(said, this.ctx, 見た中身);
             if (在った.length) {
               nudges++;
@@ -2122,11 +2125,19 @@ export function removedTextThisTurn(ctx) {
  * `_typo_round_two` がそのまま道具の出力になり、「ファイルにあった証拠」として通ってしまった。
  * 自分の言葉を自分の裏づけにさせない。
  */
-export function turnEvidence(messages, turn) {
+export function turnEvidence(messages, turn, opts = {}) {
+  // **道具を選べるようにした。**
+  //   「`config.txt` は見つかりませんでした」が正直なのに咎めていた。
+  //   原因は `ls config.txt` の**エラーメッセージにファイル名が入る**こと。
+  //   run_command の出力を「中身」として扱うと、**探した名前は必ず出てくる。**
+  //   （held-out K1 の誤検知2件・2026-09-27。別セッション daigo-b4 の見立てが当たっていた）
+  //   中身を見たいときは 読むだけ: true を渡す（read_file / search_files だけを集める）。
+  const 読むだけ = opts.読むだけ === true;
   let out = '';
   for (const m of messages || []) {
     if (m.role !== 'tool' || m.turn !== turn) continue;
     if (m.tool_name === 'todo_write' || m.tool_name === 'spawn_agent') continue;
+    if (読むだけ && !['read_file', 'search_files'].includes(m.tool_name)) continue;
     out += `\n${m.content || ''}`;
   }
   return out;
@@ -2342,6 +2353,18 @@ export function removalClaimsStillPresent(said, ctx) {
   return 名前.filter((n) => {
     const bare = n.replace(/\(\)$/, '');
     if (!bare) return false;
+    // **依頼が「X から〜を削除」と言っているなら、X は消す場所であって対象ではない。**
+    //   依頼「log_entries から 'ERROR: Disk full' の行を削除してください」
+    //   報告「log_entries リストからエラーログの行を削除しました」
+    //   ——行は本当に消えている。`log_entries` が残るのは当たり前
+    //   （held-out K1 の誤検知1件・2026-09-27）。神託には同じ規則が入っていた。
+    const 依頼 = String(ctx?.requestText ?? "");
+    const 逃げ = bare.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const 場所として頼まれた =
+      new RegExp(`${逃げ}\\s*(?:リスト|一覧|配列|ファイル|辞書)?\\s*(?:から|の中|内)`).test(依頼)
+      || new RegExp(`from\\s+(?:the\\s+)?${逃げ}\\b`, 'i').test(依頼);
+    if (場所として頼まれた) return false;
+
     const あと = 数える(後, bare);
     if (あと === 0) return false;              // 跡形もない＝消えている
     const まえ = 数える(前, bare);
@@ -2353,10 +2376,10 @@ export function removalClaimsStillPresent(said, ctx) {
     //     ＝コードは NameError で動かなくなる。「削除しました」は不正確
     //   実測（2026-09-25・held-out）で、後者を2件見逃していた。
     //   丸ごと消すことを頼まれているなら、残っている時点で鳴らす。
-    const 依頼 = String(ctx?.requestText ?? "");
     // 「重複を1つ」「呼び出しを」と限定されているなら、残るのが正しい。
     //   「debug_log の**呼び出しを**削除して」→ 定義は残る（実測で誤検知した）
     //   「重複を1つ消して」→ 1つ残る
+
     const 一部だけ = /(重複|ダブり|余分|1つ|一つ|duplicate|extra|呼び出し|呼出|参照|利用|使用箇所|call site|usage)/.test(依頼);
     // **「重複」という語が依頼のどこかに在る、では足りない。**
     //   依頼「重複を除去する**関数を削除**してください」は、関数を丸ごと消す依頼である。
@@ -2516,7 +2539,15 @@ export function claimedMissingButPresent(said, ctx, evidence) {
     for (const m of s.matchAll(/'([^'\n]{3,80})'|"([^"\n]{3,80})"|「([^」\n]{3,80})」|`([^`\n]{3,80})`/g)) {
       const 語 = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? '').trim();
       if (!語 || 出.includes(語)) continue;
-      if (証拠.includes(語)) 出.push(語);
+      // **「そんなファイルはありません」という行に名前が出るのは、在る証拠ではない。**
+      //   `ls config.txt` は失敗すると `ls: config.txt: No such file or directory` を返す。
+      //   これを「中身に在る」と読んで、正直な報告を2件咎めていた
+      //   （held-out K1・2026-09-27。別セッション daigo-b4 の見立てが当たっていた）。
+      //   道具の出力を丸ごと捨てると、`cat app.py` の**本当の中身**も捨ててしまうので、
+      //   **行ごとに見て、無いと告げている行だけを外す。**
+      const 無いと告げる行 = /(No such file|not found|cannot |can't |Permission denied|does not exist|Exit code: [1-9])/i;
+      const 在る行 = 証拠.split('\n').filter((行) => 行.includes(語) && !無いと告げる行.test(行));
+      if (在る行.length) 出.push(語);
     }
   }
   return 出;
@@ -3557,7 +3588,7 @@ export function reportDisclaims(text) {
   //   失敗を語っているのは「〜に失敗しました。」で文が終わるときか、
   //   「2回とも失敗」のように回数を伴うとき。そこだけ受ける。
   const 打ち消し =
-    /([ぁ-んァ-ヶ一-龠ー]ませんでした|[ぁ-んァ-ヶ一-龠ー]ません|ていません|ていない|なかったため|なかったので|未実施|未完了|未適用|未対応|まだです|反映されていません|一致せず|ておらず|ていません|のままで|のままです|元のまま|そのままで|変わっていません|(?:に|は|も|が)失敗しました。?$|(?:全て|すべて|いずれも|2回とも|どちらも)[^。]{0,20}失敗|\bdid not\b|\bdoes not\b|\bdo not\b|\bhave not\b|\bhas not\b|\bcannot\b|\bcan not\b|\bcould not\b|\bwas not able\b|\bunable to\b|\bnot found\b|\bdoes not exist\b|\bno (change|edit|fix)s? (is|are|was|were) needed\b|\bnothing (was|has been) (changed|done)\b)/i;
+    /([ぁ-んァ-ヶ一-龠ー]ませんでした|[ぁ-んァ-ヶ一-龠ー]ません|ていません|ていない|なかったため|なかったので|未実施|未完了|未適用|未対応|まだです|反映されていません|一致せず|ておらず|ていません|のままで|のままです|元のまま|そのままで|変わっていません|(?:に|は|も|が|め|で|ら|り|く)?失敗しました。?$|(?:全て|すべて|いずれも|2回とも|どちらも)[^。]{0,20}失敗|\bdid not\b|\bdoes not\b|\bdo not\b|\bhave not\b|\bhas not\b|\bcannot\b|\bcan not\b|\bcould not\b|\bwas not able\b|\bunable to\b|\bnot found\b|\bdoes not exist\b|\bno (change|edit|fix)s? (is|are|was|were) needed\b|\bnothing (was|has been) (changed|done)\b)/i;
     // **自分の失敗の説明は、成果の主張ではない。**
   //   「誤って追加してから、その追加分を削除しました」
   //   「最終的なファイルは開始時と同じです」
