@@ -317,7 +317,8 @@ const writeFile = {
         `${existed ? 'Overwrote' : 'Created'} ${displayPath(abs, ctx)} (${lines} lines).` +
         pendingRules(abs, ctx) +
         runAfterEdit(abs, ctx),
-      display: `${existed ? '上書き' : '新規作成'} (${lines} 行)`
+      display: `${existed ? '上書き' : '新規作成'} (${lines} 行)`,
+      event: fileChangeEvent(abs, existed ? 'update' : 'add', ctx)
     };
   }
 };
@@ -397,7 +398,8 @@ const editFile = {
         `Edited ${displayPath(abs, ctx)} (${result.count} replacement${result.count > 1 ? 's' : ''}).` +
         pendingRules(abs, ctx) +
         runAfterEdit(abs, ctx),
-      display: `${result.count} か所を置き換え${result.fuzzy ? '（空白のズレを補正）' : ''}`
+      display: `${result.count} か所を置き換え${result.fuzzy ? '（空白のズレを補正）' : ''}`,
+      event: fileChangeEvent(abs, 'update', ctx)
     };
   }
 };
@@ -1053,10 +1055,27 @@ const runCommand = {
     return {
       isError: result.code !== 0,
       output: truncateOutput(`${status}\n\n${body}`, ctx.config.maxToolChars),
-      display: result.timedOut ? '時間切れで停止' : `終了コード ${result.code}`
+      display: result.timedOut ? '時間切れで停止' : `終了コード ${result.code}`,
+      // 走った記録に残す形（events.mjs）。Codex の command_execution と同じ。
+      // 終了コードは生のまま残し、「答えが無いだけ」は countCommand と同じく通ったと数える。
+      event: {
+        type: 'command_execution',
+        command,
+        aggregated_output: body,
+        exit_code: result.timedOut ? null : result.code,
+        status: !result.timedOut && (result.code === 0 || 答えが無いだけ) ? 'completed' : 'failed'
+      }
     };
   }
 };
+
+function fileChangeEvent(abs, kind, ctx) {
+  return {
+    type: 'file_change',
+    changes: [{ path: path.relative(ctx.root, abs) || path.basename(abs), kind }],
+    status: 'completed'
+  };
+}
 
 // 止めたコマンドの出力を、どれだけ待ってから諦めるか（ミリ秒）。
 //

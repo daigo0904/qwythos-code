@@ -4761,6 +4761,74 @@ console.log('\n逆向きの嘘・門で消えていた実行の嘘');
   check('本当に走らせた結果を語る報告では鳴らない', r.length === 0, JSON.stringify(r));
 }
 
+// ── 走った記録（--events） ────────────────────────────────
+//
+// 「テストを実行しました」が本当かは、モデルの文からは分からない。
+// 道具が実際に何を走らせ、どう終わったかを codex exec --json と同じ形で残し、
+// verify/proofcheck がそれを読む。ここでは「モデルの文ではなく道具の事実が残る」ことを固定する。
+console.log('\n走った記録を codex exec --json の形で残す');
+{
+  const { createEventLog } = await import('../src/events.mjs');
+
+  class ScriptedAgent extends Agent {
+    constructor(opts) {
+      super(opts);
+      this.step = 0;
+    }
+    async streamAssistant() {
+      this.step++;
+      if (this.step === 1) {
+        return {
+          message: { role: 'assistant', content: '' },
+          toolCalls: [
+            { name: 'run_command', args: { command: 'echo half; exit 3' }, id: 'c1' },
+            { name: 'write_file', args: { path: 'fixed.txt', content: 'ok\n' }, id: 'c2' }
+          ],
+          stats: null
+        };
+      }
+      // 実際は落ちたのに「通りました」と言う
+      return { message: { role: 'assistant', content: 'テストを実行し、すべて通りました。' }, toolCalls: [], stats: null };
+    }
+  }
+
+  // ここまで来ると共通の root は片付いているので、この試験だけの作業場を作る
+  const evRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qwc-events-root-'));
+  const logFile = path.join(os.tmpdir(), `qwc-events-${process.pid}.jsonl`);
+  const agent = new ScriptedAgent({
+    config: { ...baseConfig(), autoApprove: true, isSubagent: true, maxSteps: 4 },
+    root: evRoot,
+    permissions: new PermissionManager({ ...baseConfig(), autoApprove: true }, async () => 'y')
+  });
+  agent.events = createEventLog(logFile);
+  agent.events.threadStarted('t-1');
+  await agent.runTurn('テストを直して');
+
+  const events = fs.readFileSync(logFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const types = events.map((e) => e.type);
+  const items = events.filter((e) => e.type === 'item.completed').map((e) => e.item);
+  const cmd = items.find((i) => i.type === 'command_execution');
+  const change = items.find((i) => i.type === 'file_change');
+  const said = items.find((i) => i.type === 'agent_message');
+
+  check('始まりと終わりが Codex と同じ名前で出る',
+    types[0] === 'thread.started' && types[1] === 'turn.started' && types.at(-1) === 'turn.completed', types.join(','));
+  check('走らせた命令と本当の終了コードが残る',
+    cmd && cmd.command === 'echo half; exit 3' && cmd.exit_code === 3 && cmd.status === 'failed', JSON.stringify(cmd));
+  check('出力も残る', cmd && cmd.aggregated_output.includes('half'));
+  check('書いたファイルが file_change として残る',
+    change && change.changes[0].path === 'fixed.txt' && change.changes[0].kind === 'add', JSON.stringify(change));
+  check('モデルの最後の発言も残る（突き合わせる相手）', said && said.text.includes('通りました'));
+  check('item の id は重ならない', new Set(items.map((i) => i.id)).size === items.length);
+  check('usage は Codex と同じ欄を持つ', 'input_tokens' in events.at(-1).usage && 'output_tokens' in events.at(-1).usage);
+
+  // 2回目は前の記録に混ざらない
+  createEventLog(logFile);
+  check('作り直すとまっさらになる', fs.readFileSync(logFile, 'utf8') === '');
+  fs.rmSync(logFile, { force: true });
+  fs.rmSync(evRoot, { recursive: true, force: true });
+}
+
 if (unmeasured.length) {
   console.log(`\n測れなかった: ${unmeasured.length} 件（成功にも失敗にも数えていない）`);
   for (const u of unmeasured) console.log(`  ・${u}`);
