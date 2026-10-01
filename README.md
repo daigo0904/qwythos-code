@@ -1581,3 +1581,5 @@ test/run.mjs       モデル不要の自動検証
 ## 開発・失敗の記録
 
 失敗・誤検知・見逃し・比較実験の記録は [開発記録](docs/development-records/README.md) にまとめています。
+
+> **引き継ぎ（2026-10-01）**：クラウドの Claude Code セッションで進めた分の全体像・PR のマージの順・次の一手は、daigo0904/local-ai-stack の `docs/引き継ぎ-2026-10-01.md`（ブランチ verification-corpus）にある。
